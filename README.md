@@ -1,67 +1,51 @@
 # Cloud Download Service (cloud-dl-service)
 
-A focused microservice designed for a single purpose: downloading files in batches from cloud storage providers like Google Drive and Dropbox.
+A focused microservice designed for a single purpose: downloading files in batches from cloud storage providers. It currently supports direct HTTP downloads and Dropbox integration.
 
 ## Features
 - **Batch Processing**: Group multiple file downloads into manageable batches.
-- **Multi-Cloud Support**: Fetch files seamlessly from Google Drive and Dropbox.
-- **Simple REST API**: Easy integration with your main application backend.
+- **Asynchronous Execution**: Downloads happen in background threads, keeping the API responsive.
+- **Auto-Cleanup**: Automatically delete downloaded files after a specified duration.
+- **Dropbox Support**: Direct downloading from Dropbox links (automatic `dl=1` conversion).
 
-## API Reference
+## Setup & Installation
 
-### Create a Batch
-Initialize a new download batch.
+### Prerequisites
+- **CMake** (3.18 or higher)
+- **C++ Compiler** (C++17 support required, e.g., Visual Studio 2022/2026, GCC, or Clang)
+- **Git**
 
-**`POST /v1/batch`**
-- **Request Body (`create_options`):**
-  ```json
-  {
-    "wait_duration": 5000,
-    "max_retries": 3,
-    "max_batch_size": 50,
-    "max_batch_storage": "5G",
-    "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"]
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "batch_id": "uuid-v4-string",
-    "status": "pending"
-  }
-  ```
+### Building the Project
+The project uses git submodules for dependencies.
 
-### Add a Download Task to a Batch
-Queue a specific file for download within an existing batch.
+1.  **Clone and Fetch Dependencies:**
+    ```powershell
+    git clone <repository-url>
+    cd cloud-dl-service
+    git submodule update --init --recursive --depth 1
+    ```
 
-**`POST /v1/batch/{batch_id}`**
-- **Body:** File details (e.g., file ID, destination path)
+2.  **Configure and Build:**
+    ```powershell
+    cmake -B build -G "Visual Studio 18 2026" -A x64 -DCPR_CURL_USE_LIBPSL=OFF
+    cmake --build build --config Release --parallel 8
+    ```
 
-### Start a Batch
-Initiate the download process for all tasks in a batch.
+### Configuration
+The service is configured via environment variables:
+- `STORAGE_DIRECTORY`: (Required) The root directory where all files will be saved.
+- `PORT`: (Default: 8080) The port the REST API listens on.
 
-**`POST /v1/batch/{batch_id}/start`**
+## Running the Service
+Ensure you have set the `STORAGE_DIRECTORY` environment variable before starting:
+```powershell
+$env:STORAGE_DIRECTORY = "C:\path\to\downloads"
+.\build\Release\cloud-dl-service.exe
+```
 
-### Check Batch Status
-Retrieve the current progress and status of a batch.
+## API Documentation
+For detailed information on available endpoints, request formats, and responses, please refer to:
+👉 **[API.md](./API.md)**
 
-**`GET /v1/batch/{batch_id}`**
-- **Response:**
-  ```json
-  {
-    "batch_id": "uuid-v4-string",
-    "status": "completed",
-    "tasks": [
-      {
-        "file_id": "file-1",
-        "status": "success",
-        "local_url": "/a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6.zip"
-      }
-    ]
-  }
-  ```
-
-## Setup & Configuration
-*(To be completed based on specific implementation details)*
-
-- Environment variables: (e.g., `PORT`)
+## License
+This project is licensed under the **DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE (WTFPL)**.
