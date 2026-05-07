@@ -37,6 +37,7 @@ add_library(cloud-dl-core STATIC
     src/routes/system.cpp
     src/routes/batch.cpp
     src/services/batch_manager.cpp
+    src/utils/logger.cpp
 )
 
 target_include_directories(cloud-dl-core PUBLIC 

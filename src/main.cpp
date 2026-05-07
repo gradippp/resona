@@ -1,9 +1,14 @@
 #include "crow.h"
 #include "version.h"
 #include "routes/routes.h"
+#include "utils/logger.h"
 #include <iostream>
 
 int main() {
+    // Set custom logger
+    static utils::CustomLogger logger;
+    crow::logger::setHandler(&logger);
+
     crow::SimpleApp app;
 
     // Setup routes
