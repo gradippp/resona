@@ -19,6 +19,7 @@ set(CROW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 set(CPR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(CPR_CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
 
 # Asio configuration for Crow
 set(ASIO_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include" CACHE PATH "" FORCE)
@@ -28,22 +29,31 @@ include_directories(${ASIO_INCLUDE_DIR})
 add_subdirectory(third_party/crow)
 add_subdirectory(third_party/json)
 add_subdirectory(third_party/cpr)
+add_subdirectory(third_party/catch2)
 
-# Main executable
-add_executable(cloud-dl-service 
-    src/main.cpp 
+# Core library (logic shared between main app and tests)
+add_library(cloud-dl-core STATIC
     src/routes/routes.cpp
     src/routes/system.cpp
     src/routes/batch.cpp
     src/services/batch_manager.cpp
 )
-target_include_directories(cloud-dl-service PRIVATE 
+
+target_include_directories(cloud-dl-core PUBLIC 
     "${PROJECT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-# Link libraries
-target_link_libraries(cloud-dl-service PRIVATE Crow nlohmann_json::nlohmann_json cpr)
+target_link_libraries(cloud-dl-core PUBLIC 
+    Crow 
+    nlohmann_json::nlohmann_json 
+    cpr
+)
 
-# Include directories (if needed beyond what the targets provide, though usually they handle it)
-# Crow target is INTERFACE, nlohmann_json is also INTERFACE, cpr is a library.
+# Main executable
+add_executable(cloud-dl-service src/main.cpp)
+target_link_libraries(cloud-dl-service PRIVATE cloud-dl-core)
+
+# Testing
+enable_testing()
+add_subdirectory(tests)
