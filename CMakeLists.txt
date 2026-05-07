@@ -30,8 +30,14 @@ add_subdirectory(third_party/json)
 add_subdirectory(third_party/cpr)
 
 # Main executable
-add_executable(cloud-dl-service src/main.cpp)
-target_include_directories(cloud-dl-service PRIVATE "${PROJECT_BINARY_DIR}/generated")
+add_executable(cloud-dl-service 
+    src/main.cpp 
+    src/routes/routes.cpp
+)
+target_include_directories(cloud-dl-service PRIVATE 
+    "${PROJECT_BINARY_DIR}/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 
 # Link libraries
 target_link_libraries(cloud-dl-service PRIVATE Crow nlohmann_json::nlohmann_json cpr)
