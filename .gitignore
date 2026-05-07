@@ -25,3 +25,6 @@ install_manifest.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Visual Studio
+out/
