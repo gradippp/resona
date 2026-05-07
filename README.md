@@ -1,12 +1,13 @@
-# Cloud Download Service (cloud-dl-service)
+# Strata
 
-A focused microservice designed for a single purpose: downloading files in batches from cloud storage providers. It currently supports direct HTTP downloads and Dropbox integration.
+A focused microservice designed for media ingestion and waveform processing. It handles batch processing of media files, performing downloads from various cloud providers and extracting analytical data like waveforms.
 
 ## Features
-- **Batch Processing**: Group multiple file downloads into manageable batches.
-- **Asynchronous Execution**: Downloads happen in background threads, keeping the API responsive.
-- **Auto-Cleanup**: Automatically delete downloaded files after a specified duration.
+- **Batch Processing**: Group multiple file ingestion tasks into manageable batches.
+- **Asynchronous Execution**: Ingestion and processing happen in background threads, keeping the API responsive.
+- **Auto-Cleanup**: Automatically delete processed source files after a specified duration.
 - **Dropbox Support**: Direct downloading from Dropbox links (automatic `dl=1` conversion).
+- **Waveform Extraction**: (Coming Soon) Extraction of audio waveform data for visualization and analysis.
 
 ## Setup & Installation
 
@@ -21,7 +22,7 @@ The project uses git submodules for dependencies.
 1.  **Clone and Fetch Dependencies:**
     ```powershell
     git clone <repository-url>
-    cd cloud-dl-service
+    cd strata
     git submodule update --init --recursive --depth 1
     ```
 
@@ -33,14 +34,14 @@ The project uses git submodules for dependencies.
 
 ### Configuration
 The service is configured via environment variables:
-- `STORAGE_DIRECTORY`: (Required) The root directory where all files will be saved.
+- `STORAGE_DIRECTORY`: (Required) The root directory where all files will be saved and processed.
 - `PORT`: (Default: 8080) The port the REST API listens on.
 
 ## Running the Service
 Ensure you have set the `STORAGE_DIRECTORY` environment variable before starting:
 ```powershell
-$env:STORAGE_DIRECTORY = "C:\path\to\downloads"
-.\build\Release\cloud-dl-service.exe
+$env:STORAGE_DIRECTORY = "C:\path\to\data"
+.\build\Release\strata.exe
 ```
 
 ## API Documentation

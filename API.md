@@ -1,6 +1,6 @@
-# Cloud Download Service API Documentation
+# Strata API Documentation
 
-This document describes the current REST API endpoints available in the Cloud Download Service. All endpoints return data in JSON format.
+This document describes the current REST API endpoints available in the Strata media ingestion and processing service. All endpoints return data in JSON format.
 
 ---
 
@@ -12,21 +12,29 @@ Retrieve the current version and description of the service.
 **Request:**
 `GET /v1/version`
 
+**Response (200 OK):**
+```json
+{
+  "description": "Strata",
+  "version": "0.1.0"
+}
+```
+
 ---
 
 ## 2. Configuration & Storage
 
 ### 2.1. Storage Directory
-The service uses the `STORAGE_DIRECTORY` environment variable to determine the root folder for all downloads. 
-- If `STORAGE_DIRECTORY` is set (e.g., `C:\Downloads`), then a `destination_path` of `music/song.wav` will be saved to `C:\Downloads\music\song.wav`.
+The service uses the `STORAGE_DIRECTORY` environment variable to determine the root folder for all media files. 
+- If `STORAGE_DIRECTORY` is set (e.g., `C:\Data`), then a `destination_path` of `music/song.wav` will be saved to `C:\Data\music\song.wav`.
 - Leading slashes in `destination_path` are automatically stripped when resolving against the storage directory.
 
 ---
 
-## 3. Batch Management Endpoints
+## 3. Batch Ingestion Endpoints
 
 ### 3.1. Create a Batch
-Initialize a new download batch with specific configuration options.
+Initialize a new ingestion batch with specific configuration options.
 
 **Request:**
 `POST /v1/batch`
@@ -42,7 +50,7 @@ Initialize a new download batch with specific configuration options.
   "delete_after": "24H"
 }
 ```
-*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the downloaded files will be automatically deleted after the specified duration once the batch is completed.*
+*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the source files will be automatically deleted after the specified duration once the batch is completed.*
 
 **Response (200 OK):**
 ```json
@@ -52,8 +60,8 @@ Initialize a new download batch with specific configuration options.
 }
 ```
 
-### 3.2. Add a Task to a Batch
-Queue a specific file download task.
+### 3.2. Add an Ingestion Task to a Batch
+Queue a specific media ingestion task.
 
 **Request:**
 `POST /v1/batch/{batch_id}`

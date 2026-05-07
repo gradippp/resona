@@ -29,7 +29,8 @@ bool DownloadService::download_file(const std::string& url, const std::string& d
             ofs.write(data.data(), data.size());
             return true;
         }),
-        cpr::Redirect{true} // Follow redirects (important for Dropbox)
+        cpr::Redirect{true}, // Follow redirects (important for Dropbox)
+        cpr::Timeout{5000}    // 5 second timeout
     );
 
     ofs.close();

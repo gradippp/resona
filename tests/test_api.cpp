@@ -42,7 +42,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         auto j = json::parse(response.text);
         REQUIRE(j.contains("version"));
-        REQUIRE(j["description"] == "Cloud Download Service");
+        REQUIRE(j["description"] == "Strata");
     }
 
     SECTION("Complete Batch Lifecycle") {
@@ -50,7 +50,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto create_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"wait_duration\": 1000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": []}"}
+            cpr::Body{"{\"wait_duration\": 1000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"\"}"}
         );
         
         REQUIRE(create_res.status_code == 200);
@@ -63,7 +63,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto add_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"file_id\": \"test-file-123\", \"destination_path\": \"/downloads/test.zip\"}"}
+            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_api_dl.json\"}"}
         );
         
         REQUIRE(add_res.status_code == 202);
@@ -74,6 +74,9 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         );
         
         REQUIRE(start_res.status_code == 200);
+
+        // Give the background thread time to "process" (real download now)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
         // 4. Verify the Batch Status
         auto status_res = cpr::Get(
@@ -89,7 +92,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(status_json["options"]["max_retries"] == 2);
         
         REQUIRE(status_json["tasks"].size() == 1);
-        REQUIRE(status_json["tasks"][0]["file_id"] == "test-file-123");
+        REQUIRE(status_json["tasks"][0]["file_id"] == "http://localhost:8081/v1/version");
         REQUIRE(status_json["tasks"][0]["status"] == "success");
     }
 

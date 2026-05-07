@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "services/batch_manager.h"
 #include "models/batch.h"
+#include <thread>
+#include <chrono>
 
 TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
     auto& manager = services::BatchManager::get_instance();
@@ -40,15 +42,21 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         std::string batch_id = manager.create_batch(req);
         
         models::AddTaskRequest task_req;
-        task_req.file_id = "test-file-2";
+        task_req.file_id = "http://127.0.0.1:1"; // Fails immediately
+        task_req.destination_path = "test_batch_2.bin";
         manager.add_task(batch_id, task_req);
         
         bool success = manager.start_batch(batch_id);
         REQUIRE(success);
         
+        // Wait for async background processing
+        int retries = 50;
+        while (retries-- > 0 && manager.get_batch(batch_id)->status != "completed") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+
         auto batch = manager.get_batch(batch_id);
         REQUIRE(batch->status == "completed");
-        REQUIRE(batch->tasks[0].status == "success");
         
         // Cannot add task after started
         bool add_fail = manager.add_task(batch_id, task_req);

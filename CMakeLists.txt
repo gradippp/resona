@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
-project(cloud-dl-service 
+project(strata 
     VERSION 0.1.0 
-    DESCRIPTION "Microservice for batch cloud file downloads"
+    DESCRIPTION "Microservice for media ingestion and waveform processing"
     LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -32,7 +32,7 @@ add_subdirectory(third_party/cpr)
 add_subdirectory(third_party/catch2)
 
 # Core library (logic shared between main app and tests)
-add_library(cloud-dl-core STATIC
+add_library(strata-core STATIC
     src/routes/routes.cpp
     src/routes/system.cpp
     src/routes/batch.cpp
@@ -41,20 +41,20 @@ add_library(cloud-dl-core STATIC
     src/utils/logger.cpp
 )
 
-target_include_directories(cloud-dl-core PUBLIC 
+target_include_directories(strata-core PUBLIC 
     "${PROJECT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-target_link_libraries(cloud-dl-core PUBLIC 
+target_link_libraries(strata-core PUBLIC 
     Crow 
     nlohmann_json::nlohmann_json 
     cpr
 )
 
 # Main executable
-add_executable(cloud-dl-service src/main.cpp)
-target_link_libraries(cloud-dl-service PRIVATE cloud-dl-core)
+add_executable(strata src/main.cpp)
+target_link_libraries(strata PRIVATE strata-core)
 
 # Testing
 enable_testing()
