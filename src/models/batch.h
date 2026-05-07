@@ -11,8 +11,9 @@ struct CreateBatchRequest {
     int max_batch_size = 50;
     std::string max_batch_storage = "5G";
     std::vector<std::string> allowed_services;
+    std::string delete_after = ""; // e.g., "24H", "30m"
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateBatchRequest, wait_duration, max_retries, max_batch_size, max_batch_storage, allowed_services)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateBatchRequest, wait_duration, max_retries, max_batch_size, max_batch_storage, allowed_services, delete_after)
 
 struct AddTaskRequest {
     std::string file_id;

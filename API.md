@@ -12,19 +12,20 @@ Retrieve the current version and description of the service.
 **Request:**
 `GET /v1/version`
 
-**Response (200 OK):**
-```json
-{
-  "description": "Cloud Download Service",
-  "version": "0.1.0"
-}
-```
+---
+
+## 2. Configuration & Storage
+
+### 2.1. Storage Directory
+The service uses the `STORAGE_DIRECTORY` environment variable to determine the root folder for all downloads. 
+- If `STORAGE_DIRECTORY` is set (e.g., `C:\Downloads`), then a `destination_path` of `music/song.wav` will be saved to `C:\Downloads\music\song.wav`.
+- Leading slashes in `destination_path` are automatically stripped when resolving against the storage directory.
 
 ---
 
-## 2. Batch Management Endpoints
+## 3. Batch Management Endpoints
 
-### 2.1. Create a Batch
+### 3.1. Create a Batch
 Initialize a new download batch with specific configuration options.
 
 **Request:**
@@ -37,21 +38,22 @@ Initialize a new download batch with specific configuration options.
   "max_retries": 3,
   "max_batch_size": 50,
   "max_batch_storage": "5G",
-  "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"]
+  "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"],
+  "delete_after": "24H"
 }
 ```
-*Note: All fields in the body are optional and will default to standard values if omitted.*
+*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the downloaded files will be automatically deleted after the specified duration once the batch is completed.*
 
 **Response (200 OK):**
 ```json
 {
-  "batch_id": "8b3f2a1e-5c90-4d7a-b21f-e8a9c3d4f5g6",
+  "batch_id": "uuid-v4-string",
   "status": "pending"
 }
 ```
 
-### 2.2. Add a Task to a Batch
-Queue a specific file download task within an existing, pending batch.
+### 3.2. Add a Task to a Batch
+Queue a specific file download task.
 
 **Request:**
 `POST /v1/batch/{batch_id}`
@@ -59,65 +61,13 @@ Queue a specific file download task within an existing, pending batch.
 **Body (JSON):**
 ```json
 {
-  "file_id": "file-identifier-string",
-  "destination_path": "/path/to/save/file.ext"
+  "file_id": "https://www.dropbox.com/...&dl=0",
+  "destination_path": "my_file.wav"
 }
 ```
+*Note: Dropbox URLs with `dl=0` are automatically converted to `dl=1` for direct downloading.*
 
-**Response (202 Accepted):**
-```json
-{
-  "message": "Task queued in batch {batch_id}"
-}
-```
-**Errors:**
-- `404 Not Found`: Returned if the batch does not exist or has already been started.
+---
 
-### 2.3. Start a Batch
-Initiate the processing (downloading) for all queued tasks in a specific batch.
-
-**Request:**
-`POST /v1/batch/{batch_id}/start`
-
-**Response (200 OK):**
-```json
-{
-  "message": "Batch {batch_id} started"
-}
-```
-**Errors:**
-- `404 Not Found`: Returned if the batch does not exist or is already processing/completed.
-
-### 2.4. Get Batch Status
-Retrieve the current status and options of a batch, including the status of all its individual tasks.
-
-**Request:**
-`GET /v1/batch/{batch_id}`
-
-**Response (200 OK):**
-```json
-{
-  "id": "8b3f2a1e-5c90-4d7a-b21f-e8a9c3d4f5g6",
-  "status": "completed",
-  "options": {
-    "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"],
-    "max_batch_size": 50,
-    "max_batch_storage": "5G",
-    "max_retries": 3,
-    "wait_duration": 5000
-  },
-  "tasks": [
-    {
-      "id": "c1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
-      "file_id": "file-identifier-string",
-      "destination_path": "/path/to/save/file.ext",
-      "status": "success",
-      "local_url": "/downloads/c1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c.zip"
-    }
-  ]
-}
-```
-*Note: Task statuses can be `pending`, `downloading`, `success`, or `failed`.*
-
-**Errors:**
-- `404 Not Found`: Returned if the requested batch does not exist.
+## 4. Licenses
+This project is licensed under the **DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE (WTFPL)**. See the `LICENSE` file for details.
