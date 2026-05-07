@@ -1,4 +1,5 @@
 #include "crow.h"
+#include "version.h"
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <string>
@@ -7,6 +8,14 @@ using json = nlohmann::json;
 
 int main() {
     crow::SimpleApp app;
+
+    // GET /v1/version - Get service version
+    CROW_ROUTE(app, "/v1/version")([]() {
+        json response;
+        response["version"] = CLOUD_DL_VERSION;
+        response["description"] = "Cloud Download Service";
+        return crow::response(response.dump());
+    });
 
     // POST /v1/batch - Create a Batch
     CROW_ROUTE(app, "/v1/batch").methods(crow::HTTPMethod::POST)([](const crow::request& req) {
@@ -44,6 +53,6 @@ int main() {
         return crow::response(response.dump());
     });
 
-    std::cout << "Cloud Download Service listening on port 8080..." << std::endl;
+    std::cout << "Cloud Download Service v" << CLOUD_DL_VERSION << " listening on port 8080..." << std::endl;
     app.port(8080).multithreaded().run();
 }

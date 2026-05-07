@@ -1,8 +1,17 @@
 cmake_minimum_required(VERSION 3.18)
-project(cloud-dl-service LANGUAGES CXX)
+project(cloud-dl-service 
+    VERSION 0.1.0 
+    DESCRIPTION "Microservice for batch cloud file downloads"
+    LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Version header generation
+configure_file(
+    "${PROJECT_SOURCE_DIR}/src/version.h.in"
+    "${PROJECT_BINARY_DIR}/generated/version.h"
+)
 
 # Submodule configuration
 set(CROW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -22,6 +31,7 @@ add_subdirectory(third_party/cpr)
 
 # Main executable
 add_executable(cloud-dl-service src/main.cpp)
+target_include_directories(cloud-dl-service PRIVATE "${PROJECT_BINARY_DIR}/generated")
 
 # Link libraries
 target_link_libraries(cloud-dl-service PRIVATE Crow nlohmann_json::nlohmann_json cpr)
