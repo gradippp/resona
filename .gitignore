@@ -1,0 +1,27 @@
+# CMake
+build/
+bin/
+lib/
+CMakeCache.txt
+CMakeFiles/
+CMakeSettings.json
+*.cmake
+install_manifest.txt
+
+# MSVC
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.dir/
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.dll
+
+# OS
+.DS_Store
+Thumbs.db
