@@ -33,6 +33,8 @@ add_subdirectory(third_party/cpr)
 add_executable(cloud-dl-service 
     src/main.cpp 
     src/routes/routes.cpp
+    src/routes/system.cpp
+    src/routes/batch.cpp
 )
 target_include_directories(cloud-dl-service PRIVATE 
     "${PROJECT_BINARY_DIR}/generated"
