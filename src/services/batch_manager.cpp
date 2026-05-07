@@ -1,6 +1,8 @@
 #include "batch_manager.h"
+#include "download_service.h"
 #include "../utils/uuid.h"
 #include "crow/logging.h"
+#include <thread>
 
 namespace services {
 
@@ -56,14 +58,50 @@ bool BatchManager::start_batch(const std::string& batch_id) {
     CROW_LOG_INFO << "Starting batch: " << batch_id;
     it->second.status = "processing";
     
-    // Mock processing: mark as completed immediately
-    it->second.status = "completed";
-    for (auto& task : it->second.tasks) {
-        task.status = "success";
-        task.local_url = "/downloads/" + task.id + ".zip";
-    }
+    // Launch background thread for processing
+    std::thread([this, batch_id]() {
+        CROW_LOG_INFO << "Background processing started for batch: " << batch_id;
+        
+        std::vector<models::Task> tasks_to_process;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            tasks_to_process = batches_[batch_id].tasks;
+        }
+
+        for (auto& task : tasks_to_process) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (auto& t : batches_[batch_id].tasks) {
+                    if (t.id == task.id) {
+                        t.status = "downloading";
+                        break;
+                    }
+                }
+            }
+
+            bool success = DownloadService::download_file(task.file_id, task.destination_path);
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (auto& t : batches_[batch_id].tasks) {
+                    if (t.id == task.id) {
+                        t.status = success ? "success" : "failed";
+                        if (success) {
+                            t.local_url = "file://" + task.destination_path;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            batches_[batch_id].status = "completed";
+        }
+        CROW_LOG_INFO << "Background processing completed for batch: " << batch_id;
+    }).detach(); // Detach to let it run independently
     
-    CROW_LOG_INFO << "Batch completed successfully: " << batch_id;
     return true;
 }
 
