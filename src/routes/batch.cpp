@@ -14,6 +14,11 @@ void setup(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/v1/batch").methods(crow::HTTPMethod::POST)([&manager](const crow::request& req) {
         try {
             auto body = nlohmann::json::parse(req.body);
+            
+            if (!body.contains("delete_after") || body["delete_after"].get<std::string>().empty()) {
+                return utils::error_response("'delete_after' is a required field and cannot be empty", 400);
+            }
+
             auto create_options = body.get<models::CreateBatchRequest>();
             
             std::string batch_id = manager.create_batch(create_options);

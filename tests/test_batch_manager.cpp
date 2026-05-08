@@ -23,6 +23,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
     SECTION("Create Batch") {
         models::CreateBatchRequest req;
         req.wait_duration = 3000;
+        req.delete_after = "24H";
         
         std::string batch_id = manager.create_batch(req);
         REQUIRE(!batch_id.empty());
@@ -31,11 +32,13 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         REQUIRE(batch.has_value());
         REQUIRE(batch->id == batch_id);
         REQUIRE(batch->options.wait_duration == 3000);
+        REQUIRE(batch->options.delete_after == "24H");
         REQUIRE(batch->status == "pending");
     }
 
     SECTION("Add Tasks") {
         models::CreateBatchRequest req;
+        req.delete_after = "24H";
         std::string batch_id = manager.create_batch(req);
         
         models::AddTaskRequest task_req;
@@ -54,6 +57,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         models::CreateBatchRequest req;
         req.wait_duration = 1000; // 1 second wait
         req.max_retries = 0;     // No retries for fast fail
+        req.delete_after = "24H";
         std::string batch_id = manager.create_batch(req);
         
         bool success = manager.start_batch(batch_id);
@@ -86,6 +90,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
     SECTION("Allowed Services Enforcement") {
         models::CreateBatchRequest req;
         req.allowed_services = {"DROPBOX"};
+        req.delete_after = "24H";
         std::string batch_id = manager.create_batch(req);
 
         // Dropbox URL should succeed
@@ -108,12 +113,14 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
 
         // New batch with multiple allowed
         req.allowed_services = {"DROPBOX", "GOOGLE_DRIVE"};
+        req.delete_after = "24H";
         std::string batch_id2 = manager.create_batch(req);
         REQUIRE(manager.add_task(batch_id2, task1));
         REQUIRE(manager.add_task(batch_id2, task2));
 
         // Test DIRECT
         req.allowed_services = {"DIRECT"};
+        req.delete_after = "24H";
         std::string batch_id3 = manager.create_batch(req);
         REQUIRE(!manager.add_task(batch_id3, task1)); // Dropbox blocked
         
@@ -123,6 +130,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         REQUIRE(manager.add_task(batch_id3, task4)); // Direct allowed
 
         req.allowed_services = {"DIRECT", "DROPBOX"};
+        req.delete_after = "24H";
         std::string batch_id4 = manager.create_batch(req);
         REQUIRE(manager.add_task(batch_id4, task1)); // Dropbox allowed
         REQUIRE(manager.add_task(batch_id4, task4)); // Direct allowed
