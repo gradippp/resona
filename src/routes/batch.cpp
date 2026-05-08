@@ -83,6 +83,12 @@ void setup(crow::SimpleApp& app) {
             return utils::error_response("Batch not found", 404);
         }
     });
+
+    // GET /v1/ingested - Get all ingested files metadata
+    CROW_ROUTE(app, "/v1/ingested").methods(crow::HTTPMethod::GET)([&manager]() {
+        auto tasks = manager.get_ingested_tasks();
+        return utils::json_response(tasks);
+    });
 }
 
 } // namespace batch

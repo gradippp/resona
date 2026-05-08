@@ -19,6 +19,7 @@ public:
     bool start_batch(const std::string& batch_id);
     bool complete_batch(const std::string& batch_id);
     std::optional<models::Batch> get_batch(const std::string& batch_id);
+    std::vector<models::Task> get_ingested_tasks();
 
 private:
     BatchManager() = default;

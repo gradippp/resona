@@ -150,6 +150,30 @@ Finalize a batch and mark it as completed. No more tasks can be added, and the c
 }
 ```
 
+### 3.6. List All Ingested Data
+Retrieve metadata for all successfully ingested files across all batches.
+
+**Request:**
+`GET /v1/ingested`
+
+**Response (200 OK):**
+```json
+[
+  {
+    "id": "task-uuid",
+    "file_id": "https://...",
+    "destination_path": "C:\\Data\\file.wav",
+    "status": "success",
+    "local_url": "file://C:/Data/file.wav",
+    "metadata": {
+      "file_size": 1048576,
+      "format": "WAV",
+      "duration_seconds": 120.5
+    }
+  }
+]
+```
+
 ---
 
 ## 4. Licenses

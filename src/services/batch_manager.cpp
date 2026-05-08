@@ -441,4 +441,42 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     return b;
 }
 
+std::vector<models::Task> BatchManager::get_ingested_tasks() {
+    MYSQL* conn = DatabaseService::get_instance().get_connection();
+    std::vector<models::Task> ingested_tasks;
+
+    std::string query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, "
+                        "m.file_size, m.format, m.duration_seconds "
+                        "FROM tasks t "
+                        "LEFT JOIN media_metadata m ON t.id = m.task_id "
+                        "WHERE t.status = 'success'";
+    
+    if (!mysql_query(conn, query.c_str())) {
+        MYSQL_RES* res = mysql_store_result(conn);
+        if (res) {
+            while (MYSQL_ROW row = mysql_fetch_row(res)) {
+                models::Task t;
+                t.id = row[0];
+                t.file_id = row[1];
+                t.destination_path = row[2];
+                t.status = row[3];
+                t.local_url = row[4] ? row[4] : "";
+                
+                if (row[5]) {
+                    models::TaskMetadata meta;
+                    meta.file_size = std::stoll(row[5]);
+                    meta.format = row[6] ? row[6] : "";
+                    meta.duration_seconds = std::stof(row[7]);
+                    t.metadata = meta;
+                }
+                
+                ingested_tasks.push_back(t);
+            }
+            mysql_free_result(res);
+        }
+    }
+
+    return ingested_tasks;
+}
+
 } // namespace services
