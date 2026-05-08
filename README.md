@@ -6,8 +6,8 @@ A focused microservice designed for media ingestion and waveform processing. It 
 - **Batch Processing**: Group multiple file ingestion tasks into manageable batches.
 - **Asynchronous Execution**: Ingestion and processing happen in background threads, keeping the API responsive.
 - **Auto-Cleanup**: Automatically delete processed source files after a specified duration.
-- **Dropbox Support**: Direct downloading from Dropbox links (automatic `dl=1` conversion).
-- **Waveform Extraction**: (Coming Soon) Extraction of audio waveform data for visualization and analysis.
+- **Cloud Support**: Supports Dropbox and Google Drive.
+- **Waveform Extraction**: Extraction of audio waveform data for visualization and analysis.
 
 ## Setup & Installation
 
