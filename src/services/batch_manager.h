@@ -23,6 +23,7 @@ public:
 
 private:
     BatchManager() = default;
+    std::mutex db_mutex_;
 };
 
 } // namespace services
