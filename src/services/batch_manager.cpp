@@ -15,8 +15,8 @@ using json = nlohmann::json;
 
 namespace services {
 
-static std::chrono::seconds parse_duration(const std::string& duration_str) {
-    if (duration_str.empty()) return std::chrono::seconds(0);
+static std::chrono::milliseconds parse_duration_ms(const std::string& duration_str) {
+    if (duration_str.empty()) return std::chrono::milliseconds(0);
     try {
         size_t pos = 0;
         int value = std::stoi(duration_str, &pos);
@@ -24,8 +24,13 @@ static std::chrono::seconds parse_duration(const std::string& duration_str) {
         if (unit == "H" || unit == "h") return std::chrono::hours(value);
         if (unit == "m") return std::chrono::minutes(value);
         if (unit == "s") return std::chrono::seconds(value);
+        if (unit == "ms") return std::chrono::milliseconds(value);
     } catch (...) {}
-    return std::chrono::seconds(0);
+    return std::chrono::milliseconds(0);
+}
+
+static std::chrono::seconds parse_duration(const std::string& duration_str) {
+    return std::chrono::duration_cast<std::chrono::seconds>(parse_duration_ms(duration_str));
 }
 
 static std::string escape_string(MYSQL* conn, const std::string& str) {
@@ -87,32 +92,56 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         return false;
     }
 
-    // Enforce allowed_services
+    // Parse options
+    json opts;
     try {
-        json opts = json::parse(options_str);
-        std::vector<std::string> allowed = opts.value("allowed_services", std::vector<std::string>{});
-        if (!allowed.empty()) {
-            std::string url_type = "DIRECT";
-            if (req.file_id.find("dropbox.com") != std::string::npos) {
-                url_type = "DROPBOX";
-            } else if (req.file_id.find("drive.google.com") != std::string::npos) {
-                url_type = "GOOGLE_DRIVE";
-            }
+        opts = json::parse(options_str);
+    } catch (...) {
+        opts = json::object();
+    }
 
-            bool service_allowed = false;
-            for (const auto& svc : allowed) {
-                if (svc == url_type) {
-                    service_allowed = true;
-                    break;
+    // Enforce max_batch_size
+    int max_size = opts.value("max_batch_size", 50);
+    std::string count_query = "SELECT COUNT(*) FROM tasks WHERE batch_id = '" + batch_id + "'";
+    if (!mysql_query(conn, count_query.c_str())) {
+        MYSQL_RES* count_res = mysql_store_result(conn);
+        if (count_res) {
+            MYSQL_ROW count_row = mysql_fetch_row(count_res);
+            if (count_row) {
+                int current_size = std::stoi(count_row[0]);
+                if (current_size >= max_size) {
+                    CROW_LOG_WARNING << "Batch " << batch_id << " has reached max size of " << max_size;
+                    mysql_free_result(count_res);
+                    return false;
                 }
             }
-            
-            if (!service_allowed) {
-                CROW_LOG_WARNING << "Service type '" << url_type << "' not allowed for URL: " << req.file_id;
-                return false;
+            mysql_free_result(count_res);
+        }
+    }
+
+    // Enforce allowed_services
+    std::vector<std::string> allowed = opts.value("allowed_services", std::vector<std::string>{});
+    if (!allowed.empty()) {
+        std::string url_type = "DIRECT";
+        if (req.file_id.find("dropbox.com") != std::string::npos) {
+            url_type = "DROPBOX";
+        } else if (req.file_id.find("drive.google.com") != std::string::npos) {
+            url_type = "GOOGLE_DRIVE";
+        }
+
+        bool service_allowed = false;
+        for (const auto& svc : allowed) {
+            if (svc == url_type) {
+                service_allowed = true;
+                break;
             }
         }
-    } catch (...) {}
+        
+        if (!service_allowed) {
+            CROW_LOG_WARNING << "Service type '" << url_type << "' not allowed for URL: " << req.file_id;
+            return false;
+        }
+    }
 
     std::string task_id = utils::generate_uuid_v4();
     
@@ -180,13 +209,13 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                 MYSQL_RES* res = mysql_store_result(conn);
                 if (!res) continue;
                 
-                struct BatchInfo { std::string id; int wait_ms; };
+                struct BatchInfo { std::string id; long long wait_ms; };
                 std::vector<BatchInfo> awaiting_batches;
                 MYSQL_ROW row;
                 while ((row = mysql_fetch_row(res))) {
                     try {
                         json opts = json::parse(row[1]);
-                        awaiting_batches.push_back({row[0], opts.value("wait_duration", 5000)});
+                        awaiting_batches.push_back({row[0], parse_duration_ms(opts.value("wait_duration", "5s")).count()});
                     } catch (...) {}
                 }
                 mysql_free_result(res);
@@ -385,13 +414,13 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     try {
         if (row[1]) {
             json options = json::parse(row[1]);
-            b.options.wait_duration = options.value("wait_duration", 0);
+            b.options.wait_duration = options.value("wait_duration", "5s");
             b.options.max_retries = options.value("max_retries", 0);
             b.options.max_batch_size = options.value("max_batch_size", 0);
             b.options.max_batch_storage = options.value("max_batch_storage", "");
             b.options.allowed_services = options.value("allowed_services", std::vector<std::string>{});
             b.options.delete_after = options.value("delete_after", "");
-            b.options.waveform_resolution = options.value("waveform_resolution", 256);
+            b.options.waveform_resolution = options.value("waveform_resolution", 512);
         }
     } catch (...) {}
     

@@ -28,7 +28,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
 
     SECTION("Create Batch") {
         models::CreateBatchRequest req;
-        req.wait_duration = 3000;
+        req.wait_duration = "3s";
         req.delete_after = "24H";
         
         std::string batch_id = manager.create_batch(req);
@@ -37,31 +37,35 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         auto batch = manager.get_batch(batch_id);
         REQUIRE(batch.has_value());
         REQUIRE(batch->id == batch_id);
-        REQUIRE(batch->options.wait_duration == 3000);
+        REQUIRE(batch->options.wait_duration == "3s");
         REQUIRE(batch->options.delete_after == "24H");
         REQUIRE(batch->status == "pending");
     }
 
-    SECTION("Add Tasks") {
+    SECTION("Max Batch Size Enforcement") {
         models::CreateBatchRequest req;
+        req.max_batch_size = 2;
         req.delete_after = "24H";
         std::string batch_id = manager.create_batch(req);
+
+        models::AddTaskRequest task;
+        task.file_id = "f1";
+        task.destination_path = "d1";
         
-        models::AddTaskRequest task_req;
-        task_req.file_id = "test-file-1";
-        task_req.destination_path = "/tmp/test1";
+        REQUIRE(manager.add_task(batch_id, task));
         
-        bool success = manager.add_task(batch_id, task_req);
-        REQUIRE(success);
-        
-        auto batch = manager.get_batch(batch_id);
-        REQUIRE(batch->tasks.size() == 1);
-        REQUIRE(batch->tasks[0].file_id == "test-file-1");
+        task.file_id = "f2";
+        task.destination_path = "d2";
+        REQUIRE(manager.add_task(batch_id, task));
+
+        task.file_id = "f3";
+        task.destination_path = "d3";
+        REQUIRE(!manager.add_task(batch_id, task)); // Should fail
     }
 
     SECTION("Start and Complete Batch") {
         models::CreateBatchRequest req;
-        req.wait_duration = 1000; // 1 second wait
+        req.wait_duration = "1s"; // 1 second wait
         req.max_retries = 0;     // No retries for fast fail
         req.delete_after = "24H";
         std::string batch_id = manager.create_batch(req);

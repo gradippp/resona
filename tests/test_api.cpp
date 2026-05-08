@@ -64,7 +64,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto create_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"wait_duration\": 2000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"24H\", \"waveform_resolution\": 512}"}
+            cpr::Body{"{\"wait_duration\": \"2s\", \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"24H\", \"waveform_resolution\": 512}"}
         );
         
         REQUIRE(create_res.status_code == 200);

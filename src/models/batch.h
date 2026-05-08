@@ -6,7 +6,7 @@
 namespace models {
 
 struct CreateBatchRequest {
-    int wait_duration = 5000;
+    std::string wait_duration = "5s";
     int max_retries = 3;
     int max_batch_size = 50;
     std::string max_batch_storage = "5G";

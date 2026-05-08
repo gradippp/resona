@@ -42,7 +42,7 @@ Initialize a new ingestion batch with specific configuration options.
 **Body (JSON):**
 ```json
 {
-  "wait_duration": 5000,
+  "wait_duration": "5s",
   "max_retries": 3,
   "max_batch_size": 50,
   "max_batch_storage": "5G",
@@ -51,7 +51,7 @@ Initialize a new ingestion batch with specific configuration options.
   "waveform_resolution": 512
 }
 ```
-*Note: `delete_after` is **required** and supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). Source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the number of peak data points to extract (default is 512).*
+*Note: `delete_after` is **required** and supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). Source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the number of peak data points to extract (default is 512). `wait_duration` supports string formats like "5s", "10m" (default is "5s"). `max_batch_size` limits the number of tasks that can be added to a single batch.*
 
 **Response (200 OK):**
 ```json
