@@ -4,11 +4,37 @@
 #include <iostream>
 #include <filesystem>
 #include <regex>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
+#include <algorithm>
 #include "crow/logging.h"
 
 namespace services {
 
-bool DownloadService::download_file(const std::string& url, const std::string& destination, long long max_bytes) {
+static int parse_retry_after(const std::string& retry_after) {
+    if (retry_after.empty()) return 60;
+
+    if (std::all_of(retry_after.begin(), retry_after.end(), [](unsigned char c) { return std::isdigit(c); })) {
+        try {
+            return std::stoi(retry_after);
+        } catch (...) {
+            return 60;
+        }
+    }
+
+    std::tm tm = {};
+    std::istringstream ss(retry_after);
+    ss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
+    if (ss.fail()) return 60;
+
+    time_t target_time = _mkgmtime(&tm);
+    time_t now = time(nullptr);
+    return (std::max)(0, (int)difftime(target_time, now));
+}
+
+DownloadResult DownloadService::download_file(const std::string& url, const std::string& destination, long long max_bytes) {
+    DownloadResult res;
     std::string formatted_url = format_url(url);
     CROW_LOG_INFO << "Starting download from: " << formatted_url << " to " << destination;
 
@@ -20,8 +46,9 @@ bool DownloadService::download_file(const std::string& url, const std::string& d
 
     std::ofstream ofs(destination, std::ios::binary);
     if (!ofs.is_open()) {
-        CROW_LOG_ERROR << "Failed to open destination file: " << destination;
-        return false;
+        res.error_message = "Failed to open destination file";
+        CROW_LOG_ERROR << res.error_message << ": " << destination;
+        return res;
     }
 
     long long total_bytes = 0;
@@ -38,25 +65,36 @@ bool DownloadService::download_file(const std::string& url, const std::string& d
             total_bytes += data.size();
             return true;
         }),
-        cpr::Redirect{true} // Follow redirects (important for Dropbox)
-        // Timeout removed to allow large media files
+        cpr::Redirect{true}
     );
 
     ofs.close();
 
     if (size_exceeded) {
-        CROW_LOG_ERROR << "Download aborted: File exceeds maximum allowed size (" << max_bytes << " bytes).";
+        res.error_message = "File exceeds maximum allowed size";
+        CROW_LOG_ERROR << "Download aborted: " << res.error_message << " (" << max_bytes << " bytes).";
         std::filesystem::remove(destination);
-        return false;
+        return res;
+    }
+
+    if (r.status_code == 429 || r.status_code == 503) {
+        res.rate_limited = true;
+        res.retry_after_seconds = parse_retry_after(r.header["Retry-After"]);
+        res.error_message = "Rate limited or service unavailable (HTTP " + std::to_string(r.status_code) + ")";
+        CROW_LOG_WARNING << res.error_message << ". Retrying after " << res.retry_after_seconds << "s";
+        std::filesystem::remove(destination);
+        return res;
     }
 
     if (r.status_code >= 200 && r.status_code < 300) {
         CROW_LOG_INFO << "Successfully downloaded: " << destination << " (Status: " << r.status_code << ", Size: " << total_bytes << " bytes)";
-        return true;
+        res.success = true;
+        return res;
     } else {
-        CROW_LOG_ERROR << "Failed to download: " << formatted_url << " (Status: " << r.status_code << ", Error: " << r.error.message << ")";
-        std::filesystem::remove(destination); // Clean up partial file
-        return false;
+        res.error_message = r.error.message.empty() ? "HTTP Status " + std::to_string(r.status_code) : r.error.message;
+        CROW_LOG_ERROR << "Failed to download: " << formatted_url << " (" << res.error_message << ")";
+        std::filesystem::remove(destination);
+        return res;
     }
 }
 

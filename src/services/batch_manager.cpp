@@ -227,16 +227,23 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                 bool success = false;
                                 int attempts = 0;
                                 while (attempts <= max_retries) {
-                                    if (attempts > 0) {
-                                        CROW_LOG_INFO << "Retrying task " << t.id << " (Attempt " << attempts << "/" << max_retries << ")";
-                                        std::this_thread::sleep_for(std::chrono::seconds(2));
-                                    }
-                                    
-                                    if (DownloadService::download_file(t.file_id, t.dest, max_bytes)) {
+                                    DownloadResult dl_res = DownloadService::download_file(t.file_id, t.dest, max_bytes);
+                                    if (dl_res.success) {
                                         success = true;
                                         break;
                                     }
+                                    
                                     attempts++;
+                                    if (attempts <= max_retries) {
+                                        int wait_time = 2;
+                                        if (dl_res.rate_limited) {
+                                            wait_time = dl_res.retry_after_seconds;
+                                            CROW_LOG_WARNING << "Task " << t.id << " rate limited. Respecting Retry-After: " << wait_time << "s";
+                                        } else {
+                                            CROW_LOG_INFO << "Task " << t.id << " failed: " << dl_res.error_message << ". Retrying (Attempt " << attempts << "/" << max_retries << ")";
+                                        }
+                                        std::this_thread::sleep_for(std::chrono::seconds(wait_time));
+                                    }
                                 }
 
                                 std::string status = success ? "success" : "failed";
