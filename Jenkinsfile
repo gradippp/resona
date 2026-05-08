@@ -20,40 +20,31 @@ pipeline {
                     
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     
-                    // Extract project version from CMakeLists.txt (specifically from the project() block)
-                    env.PROJECT_VERSION = sh(script: "grep -A 5 'project(' CMakeLists.txt | grep 'VERSION' | awk '{print \$2}' | tr -d ' \\r\\n'", returnStdout: true).trim()
-
+                    // Robust version extraction using grep -oP
+                    env.PROJECT_VERSION = sh(script: "grep -oP 'VERSION\\s+\\K[0-9.]+' CMakeLists.txt | head -1", returnStdout: true).trim()
                     if (!env.PROJECT_VERSION) {
                         env.PROJECT_VERSION = 'latest'
                     }
 
-                    // Handle missing DOCKER_REGISTRY
+                    // Check for required Multibranch properties
                     if (!env.DOCKER_REGISTRY) {
-                        echo "WARNING: DOCKER_REGISTRY is not set. Using local namespace."
-                        env.REGISTRY_PREFIX = ""
-                    } else {
-                        env.REGISTRY_PREFIX = "${env.DOCKER_REGISTRY}/"
+                        error "DOCKER_REGISTRY property is missing. Please set it in the Multibranch project properties or global environment."
                     }
 
-                    // Define base multi-arch manifests
-                    env.IMAGE_TAG_COMMIT = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.GIT_COMMIT_SHORT}"
-                    env.IMAGE_TAG_VERSION = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.PROJECT_VERSION}"
-                    env.IMAGE_TAG_BRANCH = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.BRANCH_NAME}"
+                    // Define tags (Full path with registry)
+                    env.BASE_IMAGE = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}"
+                    
+                    env.IMAGE_TAG_COMMIT = "${env.BASE_IMAGE}:${env.GIT_COMMIT_SHORT}"
+                    env.IMAGE_TAG_VERSION = "${env.BASE_IMAGE}:${env.PROJECT_VERSION}"
+                    env.IMAGE_TAG_BRANCH = "${env.BASE_IMAGE}:${env.BRANCH_NAME}"
 
-                    // Multi-arch specific tags for parallel builds
-                    env.IMAGE_AMD64_COMMIT = "${env.IMAGE_TAG_COMMIT}-amd64"
-                    env.IMAGE_ARM64_COMMIT = "${env.IMAGE_TAG_COMMIT}-arm64"
-                    
-                    env.IMAGE_AMD64_VERSION = "${env.IMAGE_TAG_VERSION}-amd64"
-                    env.IMAGE_ARM64_VERSION = "${env.IMAGE_TAG_VERSION}-arm64"
-                    
-                    env.IMAGE_AMD64_BRANCH = "${env.IMAGE_TAG_BRANCH}-amd64"
-                    env.IMAGE_ARM64_BRANCH = "${env.IMAGE_TAG_BRANCH}-arm64"
+                    // Architecture-specific tags
+                    env.ARCH_SUFFIX = "" // To be set in parallel stages
                 }
             }
         }
 
-        stage('Build Images') {
+        stage('Build & Push') {
             when {
                 anyOf {
                     branch 'master'
@@ -71,16 +62,12 @@ pipeline {
                                 userRemoteConfigs: scm.userRemoteConfigs
                             ])
                             sh 'git submodule update --init --recursive --depth 1'
+                            
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
-                                sh '''
-                                docker build \
-                                    -t $IMAGE_ARM64_COMMIT \
-                                    -t $IMAGE_ARM64_VERSION \
-                                    -t $IMAGE_ARM64_BRANCH .
-                                docker push $IMAGE_ARM64_COMMIT
-                                docker push $IMAGE_ARM64_VERSION
-                                docker push $IMAGE_ARM64_BRANCH
-                                '''
+                                def customImage = docker.build("${env.IMAGE_TAG_COMMIT}-arm64")
+                                customImage.push()
+                                customImage.push("${env.PROJECT_VERSION}-arm64")
+                                customImage.push("${env.BRANCH_NAME}-arm64")
                             }
                         }
                     }
@@ -96,16 +83,12 @@ pipeline {
                                 userRemoteConfigs: scm.userRemoteConfigs
                             ])
                             sh 'git submodule update --init --recursive --depth 1'
+                            
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
-                                sh '''
-                                docker build \
-                                    -t $IMAGE_AMD64_COMMIT \
-                                    -t $IMAGE_AMD64_VERSION \
-                                    -t $IMAGE_AMD64_BRANCH .
-                                docker push $IMAGE_AMD64_COMMIT
-                                docker push $IMAGE_AMD64_VERSION
-                                docker push $IMAGE_AMD64_BRANCH
-                                '''
+                                def customImage = docker.build("${env.IMAGE_TAG_COMMIT}-amd64")
+                                customImage.push()
+                                customImage.push("${env.PROJECT_VERSION}-amd64")
+                                customImage.push("${env.BRANCH_NAME}-amd64")
                             }
                         }
                     }
@@ -113,7 +96,7 @@ pipeline {
             }
         }
 
-        stage('Create Manifests') {
+        stage('Create Multi-Arch Manifests') {
             when {
                 anyOf {
                     branch 'master'
@@ -121,36 +104,35 @@ pipeline {
                 }
             }
             agent { label 'arm64' }
-
             steps {
                 script {
                     docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
                         sh '''
-                        # Manifest for Commit Hash
+                        # Manifest for Commit
                         docker manifest create $IMAGE_TAG_COMMIT \
-                            --amend $IMAGE_ARM64_COMMIT \
-                            --amend $IMAGE_AMD64_COMMIT
+                            --amend ${IMAGE_TAG_COMMIT}-arm64 \
+                            --amend ${IMAGE_TAG_COMMIT}-amd64
                         docker manifest push $IMAGE_TAG_COMMIT
 
                         # Manifest for Version
                         docker manifest create $IMAGE_TAG_VERSION \
-                            --amend $IMAGE_ARM64_VERSION \
-                            --amend $IMAGE_AMD64_VERSION
+                            --amend ${IMAGE_TAG_VERSION}-arm64 \
+                            --amend ${IMAGE_TAG_VERSION}-amd64
                         docker manifest push $IMAGE_TAG_VERSION
 
-                        # Manifest for Branch (master/dev)
+                        # Manifest for Branch
                         docker manifest create $IMAGE_TAG_BRANCH \
-                            --amend $IMAGE_ARM64_BRANCH \
-                            --amend $IMAGE_AMD64_BRANCH
+                            --amend ${IMAGE_TAG_BRANCH}-arm64 \
+                            --amend ${IMAGE_TAG_BRANCH}-amd64
                         docker manifest push $IMAGE_TAG_BRANCH
                         '''
 
                         if (env.BRANCH_NAME == 'master') {
-                            env.IMAGE_TAG_LATEST = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:latest"
+                            env.IMAGE_TAG_LATEST = "${env.BASE_IMAGE}:latest"
                             sh '''
                             docker manifest create $IMAGE_TAG_LATEST \
-                                --amend $IMAGE_ARM64_COMMIT \
-                                --amend $IMAGE_AMD64_COMMIT
+                                --amend ${IMAGE_TAG_COMMIT}-arm64 \
+                                --amend ${IMAGE_TAG_COMMIT}-amd64
                             docker manifest push $IMAGE_TAG_LATEST
                             '''
                         }
