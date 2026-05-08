@@ -1,5 +1,21 @@
-﻿version: '3.8'
+version: '3.8'
 services:
+  resona:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_USER: resona_user
+      DB_PASS: resona_password
+      DB_NAME: resona
+      STORAGE_DIRECTORY: /app/data
+    volumes:
+      - resona_data:/app/data
+    depends_on:
+      - mariadb
+
   mariadb:
     image: mariadb:10.11
     environment:
@@ -7,10 +23,9 @@ services:
       MYSQL_DATABASE: resona
       MYSQL_USER: resona_user
       MYSQL_PASSWORD: resona_password
-    ports:
-      - "3306:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
 
 volumes:
   mariadb_data:
+  resona_data:
