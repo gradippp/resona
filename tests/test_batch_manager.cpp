@@ -111,5 +111,21 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         std::string batch_id2 = manager.create_batch(req);
         REQUIRE(manager.add_task(batch_id2, task1));
         REQUIRE(manager.add_task(batch_id2, task2));
+
+        // Test DIRECT
+        req.allowed_services = {"DIRECT"};
+        std::string batch_id3 = manager.create_batch(req);
+        REQUIRE(!manager.add_task(batch_id3, task1)); // Dropbox blocked
+        
+        models::AddTaskRequest task4;
+        task4.file_id = "https://example.com/direct.wav";
+        task4.destination_path = "direct.wav";
+        REQUIRE(manager.add_task(batch_id3, task4)); // Direct allowed
+
+        req.allowed_services = {"DIRECT", "DROPBOX"};
+        std::string batch_id4 = manager.create_batch(req);
+        REQUIRE(manager.add_task(batch_id4, task1)); // Dropbox allowed
+        REQUIRE(manager.add_task(batch_id4, task4)); // Direct allowed
+        REQUIRE(!manager.add_task(batch_id4, task2)); // GDrive blocked
     }
 }

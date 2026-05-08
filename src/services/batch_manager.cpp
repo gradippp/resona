@@ -91,18 +91,23 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         json opts = json::parse(options_str);
         std::vector<std::string> allowed = opts.value("allowed_services", std::vector<std::string>{});
         if (!allowed.empty()) {
+            std::string url_type = "DIRECT";
+            if (req.file_id.find("dropbox.com") != std::string::npos) {
+                url_type = "DROPBOX";
+            } else if (req.file_id.find("drive.google.com") != std::string::npos) {
+                url_type = "GOOGLE_DRIVE";
+            }
+
             bool service_allowed = false;
             for (const auto& svc : allowed) {
-                if (svc == "DROPBOX" && req.file_id.find("dropbox.com") != std::string::npos) {
-                    service_allowed = true;
-                    break;
-                } else if (svc == "GOOGLE_DRIVE" && req.file_id.find("drive.google.com") != std::string::npos) {
+                if (svc == url_type) {
                     service_allowed = true;
                     break;
                 }
             }
+            
             if (!service_allowed) {
-                CROW_LOG_WARNING << "Service not allowed for URL: " << req.file_id;
+                CROW_LOG_WARNING << "Service type '" << url_type << "' not allowed for URL: " << req.file_id;
                 return false;
             }
         }
