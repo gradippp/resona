@@ -9,8 +9,8 @@ void setup(crow::SimpleApp& app) {
     // GET /v1/version - Get service version
     CROW_ROUTE(app, "/v1/version")([]() {
         nlohmann::json response;
-        response["version"] = STRATA_VERSION;
-        response["description"] = "Strata";
+        response["version"] = RESONA_VERSION;
+        response["description"] = "Resona";
         return utils::json_response(response);
     });
 }

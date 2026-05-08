@@ -1,7 +1,7 @@
-# MariaDB Integration for Strata
+# MariaDB Integration for Resona
 
-## Objective
-Transition Strata from in-memory state management to a persistent MariaDB database. This ensures that batches and tasks survive service restarts and provides a structured foundation to store complex media data, such as file metadata and extracted waveforms.
+Transition Resona from in-memory state management to a persistent MariaDB database. This ensures that batches and tasks survive service restarts and provides a structured foundation to store complex media data, such as file metadata and extracted waveforms.
+
 
 ## Key Components & Schema
 The database will require the following normalized schema:
@@ -36,7 +36,7 @@ The database will require the following normalized schema:
 
 1. **Add MariaDB Connector Dependency:**
    - Integrate a MariaDB/MySQL C++ Connector (e.g., `mariadb-connector-cpp` or a lightweight alternative) as a Git submodule or via CMake FetchContent, depending on build complexity.
-   - Link the connector to `strata-core` in `CMakeLists.txt`.
+   - Link the connector to `resona-core` in `CMakeLists.txt`.
 
 2. **Create `DatabaseService` (`src/services/database_service.h/cpp`):**
    - Implement a singleton service responsible for managing the connection pool to MariaDB.
@@ -58,5 +58,5 @@ The database will require the following normalized schema:
 - The `CREATE TABLE IF NOT EXISTS` statements ensure seamless deployment on fresh MariaDB instances without manual script execution.
 
 ## Verification & Testing
-- Spin up a local MariaDB instance (e.g., via Docker: `docker run -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=strata -p 3306:3306 mariadb`).
+- Spin up a local MariaDB instance (e.g., via Docker: `docker run -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=resona -p 3306:3306 mariadb`).
 - Re-run the existing API Integration Tests (`ctest`). They should pass identically, verifying that the persistent database layer correctly implements the required logic without breaking the API contract.

@@ -14,9 +14,9 @@ int main() {
     // Database initialization
     const char* db_host = std::getenv("DB_HOST") ? std::getenv("DB_HOST") : "localhost";
     const char* db_port_str = std::getenv("DB_PORT") ? std::getenv("DB_PORT") : "3306";
-    const char* db_user = std::getenv("DB_USER") ? std::getenv("DB_USER") : "strata_user";
-    const char* db_pass = std::getenv("DB_PASS") ? std::getenv("DB_PASS") : "strata_password";
-    const char* db_name = std::getenv("DB_NAME") ? std::getenv("DB_NAME") : "strata";
+    const char* db_user = std::getenv("DB_USER") ? std::getenv("DB_USER") : "resona_user";
+    const char* db_pass = std::getenv("DB_PASS") ? std::getenv("DB_PASS") : "resona_password";
+    const char* db_name = std::getenv("DB_NAME") ? std::getenv("DB_NAME") : "resona";
 
     try {
         int db_port = std::stoi(db_port_str);
@@ -32,6 +32,6 @@ int main() {
     // Setup routes
     routes::setup(app);
 
-    std::cout << "Strata v" << STRATA_VERSION << " listening on port 8080..." << std::endl;
+    std::cout << "Resona v" << RESONA_VERSION << " listening on port 8080..." << std::endl;
     app.port(8080).multithreaded().run();
 }

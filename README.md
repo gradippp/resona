@@ -1,4 +1,4 @@
-# Strata
+# Resona
 
 A focused microservice designed for media ingestion and waveform processing. It handles batch processing of media files, performing downloads from various cloud providers and extracting analytical data like waveforms.
 
@@ -22,7 +22,7 @@ The project uses git submodules for dependencies.
 1.  **Clone and Fetch Dependencies:**
     ```powershell
     git clone <repository-url>
-    cd strata
+    cd resona
     git submodule update --init --recursive --depth 1
     ```
 
@@ -41,7 +41,7 @@ The service is configured via environment variables:
 Ensure you have set the `STORAGE_DIRECTORY` environment variable before starting:
 ```powershell
 $env:STORAGE_DIRECTORY = "C:\path\to\data"
-.\build\Release\strata.exe
+.\build\Release\resona.exe
 ```
 
 ## API Documentation

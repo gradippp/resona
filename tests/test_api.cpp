@@ -17,7 +17,7 @@ struct ServerFixture {
     ServerFixture() {
         // Initialize database for testing
         try {
-            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "strata");
+            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "resona");
             services::DatabaseService::get_instance().initialize_schema();
         } catch (...) {}
 
@@ -49,7 +49,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         auto j = json::parse(response.text);
         REQUIRE(j.contains("version"));
-        REQUIRE(j["description"] == "Strata");
+        REQUIRE(j["description"] == "Resona");
     }
 
     SECTION("Long-lived Batch Lifecycle (Awaiting)") {

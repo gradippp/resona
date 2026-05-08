@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-project(strata 
+project(resona 
     VERSION 0.1.0 
     DESCRIPTION "Microservice for media ingestion and waveform processing"
     LANGUAGES CXX)
@@ -59,7 +59,7 @@ add_subdirectory(third_party/crow)
 add_subdirectory(third_party/catch2)
 
 # Core library (logic shared between main app and tests)
-add_library(strata-core STATIC
+add_library(resona-core STATIC
     src/routes/routes.cpp
     src/routes/system.cpp
     src/routes/batch.cpp
@@ -70,14 +70,14 @@ add_library(strata-core STATIC
     src/utils/size_parser.cpp
 )
 
-target_include_directories(strata-core PUBLIC 
+target_include_directories(resona-core PUBLIC 
     "${PROJECT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mariadb-connector-c/include"
     "${PROJECT_BINARY_DIR}/third_party/mariadb-connector-c/include"
 )
 
-target_link_libraries(strata-core PUBLIC 
+target_link_libraries(resona-core PUBLIC 
     Crow 
     nlohmann_json::nlohmann_json 
     cpr
@@ -85,8 +85,8 @@ target_link_libraries(strata-core PUBLIC
 )
 
 # Main executable
-add_executable(strata src/main.cpp)
-target_link_libraries(strata PRIVATE strata-core)
+add_executable(resona src/main.cpp)
+target_link_libraries(resona PRIVATE resona-core)
 
 # Testing
 enable_testing()

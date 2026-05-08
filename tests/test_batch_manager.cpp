@@ -10,7 +10,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
     static bool db_initialized = false;
     if (!db_initialized) {
         try {
-            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "strata");
+            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "resona");
             services::DatabaseService::get_instance().initialize_schema();
             db_initialized = true;
         } catch (...) {

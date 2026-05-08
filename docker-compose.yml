@@ -4,9 +4,9 @@ services:
     image: mariadb:10.11
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: strata
-      MYSQL_USER: strata_user
-      MYSQL_PASSWORD: strata_password
+      MYSQL_DATABASE: resona
+      MYSQL_USER: resona_user
+      MYSQL_PASSWORD: resona_password
     ports:
       - "3306:3306"
     volumes:

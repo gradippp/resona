@@ -1,15 +1,15 @@
 include(Catch)
 
-add_executable(strata-tests 
+add_executable(resona-tests 
     test_uuid.cpp 
     test_batch_manager.cpp 
     test_api.cpp
     test_size_parser.cpp
 )
-target_link_libraries(strata-tests
+target_link_libraries(resona-tests
     PRIVATE
     Catch2::Catch2WithMain
-    strata-core
+    resona-core
 )
 
-catch_discover_tests(strata-tests)
+catch_discover_tests(resona-tests)

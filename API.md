@@ -1,6 +1,6 @@
-# Strata API Documentation
+# Resona API Documentation
 
-This document describes the current REST API endpoints available in the Strata media ingestion and processing service. All endpoints return data in JSON format.
+This document describes the current REST API endpoints available in the Resona media ingestion and processing service. All endpoints return data in JSON format.
 
 ---
 
@@ -15,7 +15,7 @@ Retrieve the current version and description of the service.
 **Response (200 OK):**
 ```json
 {
-  "description": "Strata",
+  "description": "Resona",
   "version": "0.1.0"
 }
 ```
