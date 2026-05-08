@@ -17,12 +17,11 @@ public:
     std::string create_batch(const models::CreateBatchRequest& req);
     bool add_task(const std::string& batch_id, const models::AddTaskRequest& req);
     bool start_batch(const std::string& batch_id);
+    bool complete_batch(const std::string& batch_id);
     std::optional<models::Batch> get_batch(const std::string& batch_id);
 
 private:
     BatchManager() = default;
-    std::unordered_map<std::string, models::Batch> batches_;
-    std::mutex mutex_;
 };
 
 } // namespace services

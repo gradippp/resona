@@ -1,5 +1,6 @@
 # CMake
 build/
+build2/
 bin/
 lib/
 CMakeCache.txt
@@ -28,3 +29,6 @@ Thumbs.db
 
 # Visual Studio
 out/
+
+# Tests
+test_api_dl.json

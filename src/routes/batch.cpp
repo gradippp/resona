@@ -57,6 +57,18 @@ void setup(crow::SimpleApp& app) {
         }
     });
 
+    // POST /v1/batch/{batch_id}/complete - Mark a Batch as Complete
+    CROW_ROUTE(app, "/v1/batch/<string>/complete").methods(crow::HTTPMethod::POST)([&manager](std::string batch_id) {
+        if (manager.complete_batch(batch_id)) {
+            nlohmann::json response;
+            response["batch_id"] = batch_id;
+            response["status"] = "completed";
+            return utils::json_response(response);
+        } else {
+            return utils::error_response("Batch not found or not in awaiting state", 404);
+        }
+    });
+
     // GET /v1/batch/{batch_id} - Check Batch Status
     CROW_ROUTE(app, "/v1/batch/<string>").methods(crow::HTTPMethod::GET)([&manager](std::string batch_id) {
         auto batch = manager.get_batch(batch_id);

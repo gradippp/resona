@@ -60,6 +60,7 @@ Initialize a new ingestion batch with specific configuration options.
   "status": "pending"
 }
 ```
+*Note: Possible batch statuses are `pending`, `processing`, `awaiting`, and `completed`.*
 
 ### 3.2. Add an Ingestion Task to a Batch
 Queue a specific media ingestion task.
@@ -75,6 +76,20 @@ Queue a specific media ingestion task.
 }
 ```
 *Note: Dropbox URLs with `dl=0` are automatically converted to `dl=1` for direct downloading.*
+
+### 3.3. Mark a Batch as Complete
+Finalize a batch and mark it as completed.
+
+**Request:**
+`POST /v1/batch/{batch_id}/complete`
+
+**Response (200 OK):**
+```json
+{
+  "batch_id": "uuid-v4-string",
+  "status": "completed"
+}
+```
 
 ---
 

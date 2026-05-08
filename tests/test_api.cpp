@@ -2,6 +2,7 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 #include "routes/routes.h"
+#include "services/database_service.h"
 #include "crow.h"
 #include <thread>
 #include <chrono>
@@ -14,6 +15,12 @@ struct ServerFixture {
     std::thread server_thread;
 
     ServerFixture() {
+        // Initialize database for testing
+        try {
+            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "strata");
+            services::DatabaseService::get_instance().initialize_schema();
+        } catch (...) {}
+
         routes::setup(app);
         app.loglevel(crow::LogLevel::Warning);
         
@@ -78,7 +85,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         // Give the background thread time to "process" (real download now)
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-        // 4. Verify the Batch Status
+        // 4. Verify the Batch Status is awaiting
         auto status_res = cpr::Get(
             cpr::Url{"http://localhost:8081/v1/batch/" + batch_id}
         );
@@ -87,7 +94,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto status_json = json::parse(status_res.text);
         
         REQUIRE(status_json["id"] == batch_id);
-        REQUIRE(status_json["status"] == "completed"); // Currently mocked to complete immediately
+        REQUIRE(status_json["status"] == "awaiting");
         REQUIRE(status_json["options"]["wait_duration"] == 1000);
         REQUIRE(status_json["options"]["max_retries"] == 2);
         REQUIRE(status_json["options"]["waveform_resolution"] == 512);
@@ -95,6 +102,19 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(status_json["tasks"].size() == 1);
         REQUIRE(status_json["tasks"][0]["file_id"] == "http://localhost:8081/v1/version");
         REQUIRE(status_json["tasks"][0]["status"] == "success");
+
+        // 5. Mark as complete
+        auto complete_res = cpr::Post(
+            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id + "/complete"}
+        );
+        REQUIRE(complete_res.status_code == 200);
+
+        // 6. Verify status is now completed
+        auto final_status_res = cpr::Get(
+            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id}
+        );
+        auto final_status_json = json::parse(final_status_res.text);
+        REQUIRE(final_status_json["status"] == "completed");
     }
 
     SECTION("Adding a task to a non-existent batch fails") {

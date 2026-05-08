@@ -21,6 +21,7 @@ int main() {
     try {
         int db_port = std::stoi(db_port_str);
         services::DatabaseService::get_instance().initialize(db_host, db_port, db_user, db_pass, db_name);
+        services::DatabaseService::get_instance().initialize_schema();
     } catch (const std::exception& e) {
         CROW_LOG_WARNING << "Database initialization failed: " << e.what();
         CROW_LOG_WARNING << "Service will continue, but database-dependent features may fail.";

@@ -1,10 +1,23 @@
 #include <catch2/catch_test_macros.hpp>
 #include "services/batch_manager.h"
+#include "services/database_service.h"
 #include "models/batch.h"
 #include <thread>
 #include <chrono>
 
 TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
+    // Initialize database for testing
+    static bool db_initialized = false;
+    if (!db_initialized) {
+        try {
+            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "strata");
+            services::DatabaseService::get_instance().initialize_schema();
+            db_initialized = true;
+        } catch (...) {
+            // If it fails, tests will fail anyway with the connection error
+        }
+    }
+
     auto& manager = services::BatchManager::get_instance();
 
     SECTION("Create Batch") {
@@ -37,7 +50,7 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         REQUIRE(batch->tasks[0].file_id == "test-file-1");
     }
 
-    SECTION("Start Batch") {
+    SECTION("Start and Complete Batch") {
         models::CreateBatchRequest req;
         std::string batch_id = manager.create_batch(req);
         
@@ -49,15 +62,22 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         bool success = manager.start_batch(batch_id);
         REQUIRE(success);
         
-        // Wait for async background processing
+        // Wait for async background processing to reach 'awaiting'
         int retries = 50;
-        while (retries-- > 0 && manager.get_batch(batch_id)->status != "completed") {
+        while (retries-- > 0 && manager.get_batch(batch_id)->status != "awaiting") {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
         auto batch = manager.get_batch(batch_id);
-        REQUIRE(batch->status == "completed");
+        REQUIRE(batch->status == "awaiting");
         
+        // Mark as completed
+        bool complete_success = manager.complete_batch(batch_id);
+        REQUIRE(complete_success);
+        
+        batch = manager.get_batch(batch_id);
+        REQUIRE(batch->status == "completed");
+
         // Cannot add task after started
         bool add_fail = manager.add_task(batch_id, task_req);
         REQUIRE(!add_fail);
