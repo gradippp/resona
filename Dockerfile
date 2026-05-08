@@ -17,8 +17,6 @@ WORKDIR /app
 COPY . .
 
 # Build
-# -DMARIADB_NO_DATATYPES is passed to avoid bool redefinition in ma_global.h
-# -D_GNU_SOURCE ensures strdup is available
 RUN cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
     -DMARIADB_NO_DATATYPES=ON \
@@ -28,11 +26,14 @@ RUN cmake -B build -S . \
 # Patch ma_global.h to prevent bool redefinition
 RUN sed -i 's/typedef char[[:space:]]\+bool;/\/* typedef char bool; *\//g' third_party/mariadb-connector-c/include/ma_global.h || true
 
-# Explicitly build resona-core and resona
+# Build
 RUN cmake --build build --config Release --target resona -j$(nproc)
 
 # Collect all shared libraries required by the build
-RUN mkdir /app/libs && find build -name "*.so*" -type f -exec cp {} /app/libs/ \;
+# We search deeper and follow symlinks
+RUN mkdir /app/libs && \
+    find build -name "*.so*" -type f -exec cp -v {} /app/libs/ \; && \
+    find build -name "*.so*" -type l -exec cp -av {} /app/libs/ \;
 
 # Runtime stage
 FROM alpine:latest
