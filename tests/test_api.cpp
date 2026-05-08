@@ -50,7 +50,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto create_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"wait_duration\": 1000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"\"}"}
+            cpr::Body{"{\"wait_duration\": 1000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"\", \"waveform_resolution\": 512}"}
         );
         
         REQUIRE(create_res.status_code == 200);
@@ -90,6 +90,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(status_json["status"] == "completed"); // Currently mocked to complete immediately
         REQUIRE(status_json["options"]["wait_duration"] == 1000);
         REQUIRE(status_json["options"]["max_retries"] == 2);
+        REQUIRE(status_json["options"]["waveform_resolution"] == 512);
         
         REQUIRE(status_json["tasks"].size() == 1);
         REQUIRE(status_json["tasks"][0]["file_id"] == "http://localhost:8081/v1/version");

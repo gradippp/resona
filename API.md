@@ -47,10 +47,11 @@ Initialize a new ingestion batch with specific configuration options.
   "max_batch_size": 50,
   "max_batch_storage": "5G",
   "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"],
-  "delete_after": "24H"
+  "delete_after": "24H",
+  "waveform_resolution": 256
 }
 ```
-*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the source files will be automatically deleted after the specified duration once the batch is completed.*
+*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the resolution for future waveform extraction (default is 256).*
 
 **Response (200 OK):**
 ```json
