@@ -46,12 +46,12 @@ Initialize a new ingestion batch with specific configuration options.
   "max_retries": 3,
   "max_batch_size": 50,
   "max_batch_storage": "5G",
-  "allowed_services": ["GOOGLE_DRIVE", "DROPBOX"],
+  "allowed_services": ["GOOGLE_DRIVE", "DROPBOX", "DIRECT"],
   "delete_after": "24H",
   "waveform_resolution": 256
 }
 ```
-*Note: `delete_after` supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). If provided, the source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the resolution for future waveform extraction (default is 256).*
+*Note: `delete_after` is **required** and supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). Source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the number of peak data points to extract (default is 256).*
 
 **Response (200 OK):**
 ```json
@@ -60,10 +60,9 @@ Initialize a new ingestion batch with specific configuration options.
   "status": "pending"
 }
 ```
-*Note: Possible batch statuses are `pending`, `processing`, `awaiting`, and `completed`.*
 
 ### 3.2. Add an Ingestion Task to a Batch
-Queue a specific media ingestion task.
+Queue a specific media ingestion task. This can be called while a batch is `pending` or `awaiting`.
 
 **Request:**
 `POST /v1/batch/{batch_id}`
@@ -75,10 +74,70 @@ Queue a specific media ingestion task.
   "destination_path": "my_file.wav"
 }
 ```
-*Note: Dropbox URLs with `dl=0` are automatically converted to `dl=1` for direct downloading.*
+*Note: Resona automatically handles direct download links for Dropbox and Google Drive. Supported `allowed_services` types are `DROPBOX`, `GOOGLE_DRIVE`, and `DIRECT` (for standard URLs).*
 
-### 3.3. Mark a Batch as Complete
-Finalize a batch and mark it as completed.
+**Response (202 Accepted):**
+```json
+{
+  "message": "Task added to batch"
+}
+```
+
+### 3.3. Start a Batch
+Begin processing tasks for a batch. The batch will transition to `awaiting` status.
+
+**Request:**
+`POST /v1/batch/{batch_id}/start`
+
+**Response (200 OK):**
+```json
+{
+  "batch_id": "uuid-v4-string",
+  "status": "awaiting"
+}
+```
+*Note: In the `awaiting` state, the background monitor will automatically process any tasks added to the batch after the configured `wait_duration` has elapsed. The batch remains in this state until manually completed.*
+
+### 3.4. Check Batch Status & Results
+Retrieve the current status of a batch and the results (metadata/waveforms) of its tasks.
+
+**Request:**
+`GET /v1/batch/{batch_id}`
+
+**Response (200 OK):**
+```json
+{
+  "id": "uuid-v4-string",
+  "status": "awaiting",
+  "options": {
+    "wait_duration": 5000,
+    "max_retries": 3,
+    "max_batch_size": 50,
+    "max_batch_storage": "5G",
+    "allowed_services": ["GOOGLE_DRIVE"],
+    "delete_after": "24H",
+    "waveform_resolution": 256
+  },
+  "tasks": [
+    {
+      "id": "task-uuid",
+      "file_id": "https://...",
+      "destination_path": "C:\\Data\\file.wav",
+      "status": "success",
+      "local_url": "file://C:/Data/file.wav",
+      "metadata": {
+        "file_size": 1048576,
+        "format": "WAV",
+        "duration_seconds": 120.5
+      },
+      "waveform": [0.1, 0.45, 0.9, 0.2, "..."]
+    }
+  ]
+}
+```
+
+### 3.5. Mark a Batch as Complete
+Finalize a batch and mark it as completed. No more tasks can be added, and the cleanup timer for `delete_after` will start.
 
 **Request:**
 `POST /v1/batch/{batch_id}/complete`
