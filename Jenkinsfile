@@ -10,6 +10,9 @@ pipeline {
             agent any
             steps {
                 script {
+                    checkout scm
+                    sh 'git submodule update --init --recursive'
+                    
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     
                     // Extract project version from CMakeLists.txt (specifically from the project() block)
@@ -19,10 +22,18 @@ pipeline {
                         env.PROJECT_VERSION = 'latest'
                     }
 
+                    // Handle missing DOCKER_REGISTRY
+                    if (!env.DOCKER_REGISTRY) {
+                        echo "WARNING: DOCKER_REGISTRY is not set. Using local namespace."
+                        env.REGISTRY_PREFIX = ""
+                    } else {
+                        env.REGISTRY_PREFIX = "${env.DOCKER_REGISTRY}/"
+                    }
+
                     // Define base multi-arch manifests
-                    env.IMAGE_TAG_COMMIT = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.GIT_COMMIT_SHORT}"
-                    env.IMAGE_TAG_VERSION = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.PROJECT_VERSION}"
-                    env.IMAGE_TAG_BRANCH = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BRANCH_NAME}"
+                    env.IMAGE_TAG_COMMIT = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.GIT_COMMIT_SHORT}"
+                    env.IMAGE_TAG_VERSION = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.PROJECT_VERSION}"
+                    env.IMAGE_TAG_BRANCH = "${env.REGISTRY_PREFIX}${env.IMAGE_NAME}:${env.BRANCH_NAME}"
 
                     // Multi-arch specific tags for parallel builds
                     env.IMAGE_AMD64_COMMIT = "${env.IMAGE_TAG_COMMIT}-amd64"
@@ -49,6 +60,8 @@ pipeline {
                     agent { label 'arm64' }
                     steps {
                         script {
+                            checkout scm
+                            sh 'git submodule update --init --recursive'
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
                                 sh '''
                                 docker build \
@@ -68,6 +81,8 @@ pipeline {
                     agent { label 'amd64' }
                     steps {
                         script {
+                            checkout scm
+                            sh 'git submodule update --init --recursive'
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
                                 sh '''
                                 docker build \
