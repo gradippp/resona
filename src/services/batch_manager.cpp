@@ -1,5 +1,6 @@
 #include "batch_manager.h"
 #include "download_service.h"
+#include "media_service.h"
 #include "database_service.h"
 #include "../utils/uuid.h"
 #include "../utils/size_parser.h"
@@ -277,6 +278,42 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                 std::string status = success ? "success" : "failed";
                                 std::string local_url = success ? "file://" + escape_string(t_conn, t.dest) : "";
                                 mysql_query(t_conn, ("UPDATE tasks SET status = '" + status + "', local_url = '" + local_url + "' WHERE id = '" + t.id + "'").c_str());
+
+                                if (success) {
+                                    // Extract waveform and metadata
+                                    int res_val = 256;
+                                    std::string res_query = "SELECT options FROM batches WHERE id = '" + b_id + "'";
+                                    if (!mysql_query(t_conn, res_query.c_str())) {
+                                        MYSQL_RES* res_ptr = mysql_store_result(t_conn);
+                                        if (res_ptr) {
+                                            MYSQL_ROW res_row = mysql_fetch_row(res_ptr);
+                                            if (res_row) {
+                                                try {
+                                                    json opts = json::parse(res_row[0]);
+                                                    res_val = opts.value("waveform_resolution", 256);
+                                                } catch (...) {}
+                                            }
+                                            mysql_free_result(res_ptr);
+                                        }
+                                    }
+
+                                    MediaResult m_res = MediaService::extract_waveform(t.dest, res_val);
+                                    if (m_res.success) {
+                                        // Save metadata
+                                        std::string meta_query = "INSERT INTO media_metadata (task_id, file_size, format, duration_seconds) VALUES ('" +
+                                                                 t.id + "', " + std::to_string(m_res.file_size) + ", '" + 
+                                                                 escape_string(t_conn, m_res.format) + "', " + std::to_string(m_res.duration_seconds) + ") " +
+                                                                 "ON DUPLICATE KEY UPDATE file_size=VALUES(file_size), format=VALUES(format), duration_seconds=VALUES(duration_seconds)";
+                                        mysql_query(t_conn, meta_query.c_str());
+
+                                        // Save waveform
+                                        json wave_json = m_res.waveform_data;
+                                        std::string wave_query = "INSERT INTO waveforms (task_id, waveform_data, resolution) VALUES ('" +
+                                                                 t.id + "', '" + escape_string(t_conn, wave_json.dump()) + "', " + std::to_string(res_val) + ") " +
+                                                                 "ON DUPLICATE KEY UPDATE waveform_data=VALUES(waveform_data), resolution=VALUES(resolution)";
+                                        mysql_query(t_conn, wave_query.c_str());
+                                    }
+                                }
                             }
                             CROW_LOG_INFO << "Processed " << tasks_to_do.size() << " tasks for batch " << b_id;
                         }).detach();
@@ -360,8 +397,14 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     
     mysql_free_result(res);
 
-    // Fetch tasks
-    std::string task_query = "SELECT id, file_id, destination_path, status, local_url FROM tasks WHERE batch_id = '" + batch_id + "'";
+    // Fetch tasks with metadata and waveform
+    std::string task_query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, "
+                             "m.file_size, m.format, m.duration_seconds, w.waveform_data "
+                             "FROM tasks t "
+                             "LEFT JOIN media_metadata m ON t.id = m.task_id "
+                             "LEFT JOIN waveforms w ON t.id = w.task_id "
+                             "WHERE t.batch_id = '" + batch_id + "'";
+    
     if (!mysql_query(conn, task_query.c_str())) {
         MYSQL_RES* task_res = mysql_store_result(conn);
         if (task_res) {
@@ -372,6 +415,23 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
                 t.destination_path = task_row[2];
                 t.status = task_row[3];
                 t.local_url = task_row[4] ? task_row[4] : "";
+                
+                // Metadata
+                if (task_row[5]) { // If file_size is present, assume metadata exists
+                    models::TaskMetadata meta;
+                    meta.file_size = std::stoll(task_row[5]);
+                    meta.format = task_row[6] ? task_row[6] : "";
+                    meta.duration_seconds = std::stof(task_row[7]);
+                    t.metadata = meta;
+                }
+                
+                // Waveform
+                if (task_row[8]) {
+                    try {
+                        t.waveform = json::parse(task_row[8]).get<std::vector<float>>();
+                    } catch (...) {}
+                }
+                
                 b.tasks.push_back(t);
             }
             mysql_free_result(task_res);

@@ -5,6 +5,7 @@ add_executable(resona-tests
     test_batch_manager.cpp 
     test_api.cpp
     test_size_parser.cpp
+    test_media_service.cpp
 )
 target_link_libraries(resona-tests
     PRIVATE

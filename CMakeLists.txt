@@ -66,6 +66,7 @@ add_library(resona-core STATIC
     src/services/batch_manager.cpp
     src/services/database_service.cpp
     src/services/download_service.cpp
+    src/services/media_service.cpp
     src/utils/logger.cpp
     src/utils/size_parser.cpp
 )

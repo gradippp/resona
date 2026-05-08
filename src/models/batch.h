@@ -22,14 +22,23 @@ struct AddTaskRequest {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AddTaskRequest, file_id, destination_path)
 
+struct TaskMetadata {
+    long long file_size = 0;
+    std::string format = "";
+    float duration_seconds = 0.0f;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TaskMetadata, file_size, format, duration_seconds)
+
 struct Task {
     std::string id;
     std::string file_id;
     std::string destination_path;
     std::string status = "pending"; // pending, downloading, success, failed
     std::string local_url = "";
+    std::optional<TaskMetadata> metadata;
+    std::vector<float> waveform;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, destination_path, status, local_url)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, destination_path, status, local_url, metadata, waveform)
 
 struct Batch {
     std::string id;

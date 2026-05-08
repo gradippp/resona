@@ -17,8 +17,15 @@ struct ServerFixture {
     ServerFixture() {
         // Initialize database for testing
         try {
-            services::DatabaseService::get_instance().initialize("localhost", 3307, "root", "root", "resona");
-            services::DatabaseService::get_instance().initialize_schema();
+            auto& db = services::DatabaseService::get_instance();
+            try {
+                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
+            } catch (...) {
+                db.initialize("127.0.0.1", 3307, "root", "root", "");
+                mysql_query(db.get_connection(), "CREATE DATABASE IF NOT EXISTS resona");
+                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
+            }
+            db.initialize_schema();
         } catch (...) {}
 
         routes::setup(app);
