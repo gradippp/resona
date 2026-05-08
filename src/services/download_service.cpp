@@ -10,6 +10,10 @@
 #include <algorithm>
 #include "crow/logging.h"
 
+#ifdef _WIN32
+#define timegm _mkgmtime
+#endif
+
 namespace services {
 
 static int parse_retry_after(const std::string& retry_after) {
@@ -28,7 +32,7 @@ static int parse_retry_after(const std::string& retry_after) {
     ss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
     if (ss.fail()) return 60;
 
-    time_t target_time = _mkgmtime(&tm);
+    time_t target_time = timegm(&tm);
     time_t now = time(nullptr);
     return (std::max)(0, (int)difftime(target_time, now));
 }

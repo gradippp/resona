@@ -40,6 +40,9 @@ set(INSTALL_MANDIR "man" CACHE STRING "" FORCE)
 set(INSTALL_PCDIR "lib/pkgconfig" CACHE STRING "" FORCE)
 set(SKIP_INSTALL_ALL ON)
 
+# Fix for bool redefinition in ma_global.h when using newer GCC/Alpine
+add_definitions(-DMARIADB_NO_DATATYPES)
+
 # Asio configuration for Crow
 set(ASIO_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asio/include" CACHE PATH "" FORCE)
 include_directories(${ASIO_INCLUDE_DIR})

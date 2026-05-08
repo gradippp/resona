@@ -8,7 +8,8 @@ RUN apk add --no-cache \
     openssl-dev \
     mariadb-dev \
     linux-headers \
-    pkgconf
+    pkgconf \
+    mariadb-connector-c-dev
 
 WORKDIR /app
 
@@ -16,7 +17,18 @@ WORKDIR /app
 COPY . .
 
 # Build
-RUN cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+# -DMARIADB_NO_DATATYPES is passed to avoid bool redefinition in ma_global.h
+# -D_GNU_SOURCE ensures strdup is available
+RUN cmake -B build -S . \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DMARIADB_NO_DATATYPES=ON \
+    -DCMAKE_C_FLAGS="-DMARIADB_NO_DATATYPES -D_GNU_SOURCE -DMC_SKIP_BOOL_TYPEDEF" \
+    -DCMAKE_CXX_FLAGS="-DMARIADB_NO_DATATYPES"
+
+# Patch ma_global.h to prevent bool redefinition
+RUN sed -i 's/typedef char[[:space:]]\+bool;/\/* typedef char bool; *\//g' third_party/mariadb-connector-c/include/ma_global.h || true
+
+# Explicitly build resona-core and resona
 RUN cmake --build build --config Release --target resona -j$(nproc)
 
 # Collect all shared libraries required by the build
