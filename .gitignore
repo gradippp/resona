@@ -32,3 +32,4 @@ out/
 
 # Tests
 test_api_dl.json
+test_awaiting_*.json
