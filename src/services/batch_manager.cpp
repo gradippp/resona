@@ -2,6 +2,7 @@
 #include "download_service.h"
 #include "database_service.h"
 #include "../utils/uuid.h"
+#include "../utils/size_parser.h"
 #include "crow/logging.h"
 #include <thread>
 #include <chrono>
@@ -197,11 +198,47 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                         }
                         mysql_free_result(task_res);
 
+                        // Launch processing thread for this set of tasks
                         std::thread([tasks_to_do, b_id = b.id]() {
                             MYSQL* t_conn = DatabaseService::get_instance().get_connection();
+                            
+                            // Get batch options for retries and size limits
+                            int max_retries = 0;
+                            long long max_bytes = 0;
+                            std::string opt_query = "SELECT options FROM batches WHERE id = '" + b_id + "'";
+                            if (!mysql_query(t_conn, opt_query.c_str())) {
+                                MYSQL_RES* opt_res = mysql_store_result(t_conn);
+                                if (opt_res) {
+                                    MYSQL_ROW opt_row = mysql_fetch_row(opt_res);
+                                    if (opt_row) {
+                                        try {
+                                            json opts = json::parse(opt_row[0]);
+                                            max_retries = opts.value("max_retries", 3);
+                                            max_bytes = utils::parse_size_string(opts.value("max_batch_storage", "0"));
+                                        } catch (...) {}
+                                    }
+                                    mysql_free_result(opt_res);
+                                }
+                            }
+
                             for (const auto& t : tasks_to_do) {
                                 mysql_query(t_conn, ("UPDATE tasks SET status = 'downloading' WHERE id = '" + t.id + "'").c_str());
-                                bool success = DownloadService::download_file(t.file_id, t.dest);
+                                
+                                bool success = false;
+                                int attempts = 0;
+                                while (attempts <= max_retries) {
+                                    if (attempts > 0) {
+                                        CROW_LOG_INFO << "Retrying task " << t.id << " (Attempt " << attempts << "/" << max_retries << ")";
+                                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                                    }
+                                    
+                                    if (DownloadService::download_file(t.file_id, t.dest, max_bytes)) {
+                                        success = true;
+                                        break;
+                                    }
+                                    attempts++;
+                                }
+
                                 std::string status = success ? "success" : "failed";
                                 std::string local_url = success ? "file://" + escape_string(t_conn, t.dest) : "";
                                 mysql_query(t_conn, ("UPDATE tasks SET status = '" + status + "', local_url = '" + local_url + "' WHERE id = '" + t.id + "'").c_str());

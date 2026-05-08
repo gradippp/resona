@@ -67,6 +67,7 @@ add_library(strata-core STATIC
     src/services/database_service.cpp
     src/services/download_service.cpp
     src/utils/logger.cpp
+    src/utils/size_parser.cpp
 )
 
 target_include_directories(strata-core PUBLIC 
