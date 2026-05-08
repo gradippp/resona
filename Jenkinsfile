@@ -10,8 +10,13 @@ pipeline {
             agent any
             steps {
                 script {
-                    checkout scm
-                    sh 'git submodule update --init --recursive'
+                    checkout([$class: 'GitSCM', 
+                        branches: scm.branches, 
+                        doGenerateSubmoduleConfigurations: scm.doGenerateSubmoduleConfigurations, 
+                        extensions: scm.extensions + [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+                        userRemoteConfigs: scm.userRemoteConfigs
+                    ])
+                    sh 'git submodule update --init --recursive --depth 1'
                     
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     
@@ -60,8 +65,12 @@ pipeline {
                     agent { label 'arm64' }
                     steps {
                         script {
-                            checkout scm
-                            sh 'git submodule update --init --recursive'
+                            checkout([$class: 'GitSCM', 
+                                branches: scm.branches, 
+                                extensions: scm.extensions + [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+                                userRemoteConfigs: scm.userRemoteConfigs
+                            ])
+                            sh 'git submodule update --init --recursive --depth 1'
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
                                 sh '''
                                 docker build \
@@ -81,8 +90,12 @@ pipeline {
                     agent { label 'amd64' }
                     steps {
                         script {
-                            checkout scm
-                            sh 'git submodule update --init --recursive'
+                            checkout([$class: 'GitSCM', 
+                                branches: scm.branches, 
+                                extensions: scm.extensions + [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+                                userRemoteConfigs: scm.userRemoteConfigs
+                            ])
+                            sh 'git submodule update --init --recursive --depth 1'
                             docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
                                 sh '''
                                 docker build \
