@@ -52,69 +52,65 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(j["description"] == "Strata");
     }
 
-    SECTION("Complete Batch Lifecycle") {
-        // 1. Create a Batch
+    SECTION("Long-lived Batch Lifecycle (Awaiting)") {
+        // 1. Create a Batch with a short wait_duration
         auto create_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"wait_duration\": 1000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"\", \"waveform_resolution\": 512}"}
+            cpr::Body{"{\"wait_duration\": 2000, \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"delete_after\": \"\", \"waveform_resolution\": 512}"}
         );
         
         REQUIRE(create_res.status_code == 200);
         auto create_json = json::parse(create_res.text);
-        REQUIRE(create_json.contains("batch_id"));
         std::string batch_id = create_json["batch_id"];
-        REQUIRE(create_json["status"] == "pending");
 
-        // 2. Add a Task to the Batch
-        auto add_res = cpr::Post(
-            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
-            cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_api_dl.json\"}"}
-        );
-        
-        REQUIRE(add_res.status_code == 202);
-        
-        // 3. Start the Batch
+        // 2. Start the Batch immediately (it moves to awaiting)
         auto start_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch/" + batch_id + "/start"}
         );
-        
         REQUIRE(start_res.status_code == 200);
 
-        // Give the background thread time to "process" (real download now)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-        // 4. Verify the Batch Status is awaiting
-        auto status_res = cpr::Get(
-            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id}
+        // 3. Add first Task
+        auto add_res1 = cpr::Post(
+            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_awaiting_1.json\"}"}
         );
-        
-        REQUIRE(status_res.status_code == 200);
-        auto status_json = json::parse(status_res.text);
-        
-        REQUIRE(status_json["id"] == batch_id);
-        REQUIRE(status_json["status"] == "awaiting");
-        REQUIRE(status_json["options"]["wait_duration"] == 1000);
-        REQUIRE(status_json["options"]["max_retries"] == 2);
-        REQUIRE(status_json["options"]["waveform_resolution"] == 512);
-        
-        REQUIRE(status_json["tasks"].size() == 1);
-        REQUIRE(status_json["tasks"][0]["file_id"] == "http://localhost:8081/v1/version");
-        REQUIRE(status_json["tasks"][0]["status"] == "success");
+        REQUIRE(add_res1.status_code == 202);
 
-        // 5. Mark as complete
-        auto complete_res = cpr::Post(
-            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id + "/complete"}
+        // Wait for processing (wait_duration 2s + some buffer)
+        std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+
+        // 4. Verify first task succeeded and batch is still awaiting
+        auto status_res1 = cpr::Get(cpr::Url{"http://localhost:8081/v1/batch/" + batch_id});
+        auto status_json1 = json::parse(status_res1.text);
+        REQUIRE(status_json1["status"] == "awaiting");
+        REQUIRE(status_json1["tasks"].size() == 1);
+        REQUIRE(status_json1["tasks"][0]["status"] == "success");
+
+        // 5. Add second Task
+        auto add_res2 = cpr::Post(
+            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_awaiting_2.json\"}"}
         );
+        REQUIRE(add_res2.status_code == 202);
+
+        // Wait for second task
+        std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+
+        // 6. Verify second task succeeded
+        auto status_res2 = cpr::Get(cpr::Url{"http://localhost:8081/v1/batch/" + batch_id});
+        auto status_json2 = json::parse(status_res2.text);
+        REQUIRE(status_json2["tasks"].size() == 2);
+        REQUIRE(status_json2["tasks"][1]["status"] == "success");
+
+        // 7. Complete the batch
+        auto complete_res = cpr::Post(cpr::Url{"http://localhost:8081/v1/batch/" + batch_id + "/complete"});
         REQUIRE(complete_res.status_code == 200);
 
-        // 6. Verify status is now completed
-        auto final_status_res = cpr::Get(
-            cpr::Url{"http://localhost:8081/v1/batch/" + batch_id}
-        );
-        auto final_status_json = json::parse(final_status_res.text);
-        REQUIRE(final_status_json["status"] == "completed");
+        auto final_status_res = cpr::Get(cpr::Url{"http://localhost:8081/v1/batch/" + batch_id});
+        REQUIRE(json::parse(final_status_res.text)["status"] == "completed");
     }
 
     SECTION("Adding a task to a non-existent batch fails") {

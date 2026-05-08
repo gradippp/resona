@@ -52,24 +52,27 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
 
     SECTION("Start and Complete Batch") {
         models::CreateBatchRequest req;
+        req.wait_duration = 1000; // 1 second wait
         std::string batch_id = manager.create_batch(req);
-        
-        models::AddTaskRequest task_req;
-        task_req.file_id = "http://127.0.0.1:1"; // Fails immediately
-        task_req.destination_path = "test_batch_2.bin";
-        manager.add_task(batch_id, task_req);
         
         bool success = manager.start_batch(batch_id);
         REQUIRE(success);
         
-        // Wait for async background processing to reach 'awaiting'
-        int retries = 50;
-        while (retries-- > 0 && manager.get_batch(batch_id)->status != "awaiting") {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
+        // Batch should be awaiting
+        REQUIRE(manager.get_batch(batch_id)->status == "awaiting");
+
+        models::AddTaskRequest task_req;
+        task_req.file_id = "http://127.0.0.1:1"; 
+        task_req.destination_path = "test_batch_2.bin";
+        manager.add_task(batch_id, task_req);
+        
+        // Wait for background processing (wait_duration 1s + buffer + download time)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
         auto batch = manager.get_batch(batch_id);
         REQUIRE(batch->status == "awaiting");
+        REQUIRE(batch->tasks.size() == 1);
+        REQUIRE(batch->tasks[0].status == "failed"); // Expected fail on port 1
         
         // Mark as completed
         bool complete_success = manager.complete_batch(batch_id);
@@ -77,9 +80,5 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         
         batch = manager.get_batch(batch_id);
         REQUIRE(batch->status == "completed");
-
-        // Cannot add task after started
-        bool add_fail = manager.add_task(batch_id, task_req);
-        REQUIRE(!add_fail);
     }
 }

@@ -79,8 +79,8 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     std::string status = row[0];
     mysql_free_result(res);
     
-    if (status != "pending") {
-        CROW_LOG_WARNING << "Attempted to add task to batch that is no longer pending: " << batch_id;
+    if (status != "pending" && status != "awaiting") {
+        CROW_LOG_WARNING << "Attempted to add task to batch that is " << status << ": " << batch_id;
         return false;
     }
 
@@ -132,46 +132,89 @@ bool BatchManager::start_batch(const std::string& batch_id) {
     
     if (status != "pending") return false;
 
-    std::string update_query = "UPDATE batches SET status = 'processing' WHERE id = '" + batch_id + "'";
+    std::string update_query = "UPDATE batches SET status = 'awaiting' WHERE id = '" + batch_id + "'";
     if (mysql_query(conn, update_query.c_str())) return false;
 
-    CROW_LOG_INFO << "Starting batch: " << batch_id;
+    CROW_LOG_INFO << "Started batch (moved to awaiting): " << batch_id;
     
-    std::thread([this, batch_id]() {
-        MYSQL* conn = DatabaseService::get_instance().get_connection();
-        
-        // Fetch tasks
-        std::string fetch_query = "SELECT id, file_id, destination_path FROM tasks WHERE batch_id = '" + batch_id + "'";
-        if (mysql_query(conn, fetch_query.c_str())) return;
-        
-        MYSQL_RES* res = mysql_store_result(conn);
-        if (!res) return;
-        
-        struct TaskInfo { std::string id, file_id, dest; };
-        std::vector<TaskInfo> tasks;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(res))) {
-            tasks.push_back({row[0], row[1], row[2]});
-        }
-        mysql_free_result(res);
+    static std::once_flag monitor_started;
+    std::call_once(monitor_started, [this]() {
+        std::thread([this]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                
+                MYSQL* conn = DatabaseService::get_instance().get_connection();
+                std::string poll_query = "SELECT id, options FROM batches WHERE status = 'awaiting'";
+                if (mysql_query(conn, poll_query.c_str())) continue;
+                
+                MYSQL_RES* res = mysql_store_result(conn);
+                if (!res) continue;
+                
+                struct BatchInfo { std::string id; int wait_ms; };
+                std::vector<BatchInfo> awaiting_batches;
+                MYSQL_ROW row;
+                while ((row = mysql_fetch_row(res))) {
+                    try {
+                        json opts = json::parse(row[1]);
+                        awaiting_batches.push_back({row[0], opts.value("wait_duration", 5000)});
+                    } catch (...) {}
+                }
+                mysql_free_result(res);
 
-        for (const auto& task : tasks) {
-            std::string up_status = "UPDATE tasks SET status = 'downloading' WHERE id = '" + task.id + "'";
-            mysql_query(conn, up_status.c_str());
+                for (const auto& b : awaiting_batches) {
+                    std::string task_query = "SELECT id, file_id, destination_path, created_at FROM tasks "
+                                             "WHERE batch_id = '" + b.id + "' AND status = 'pending' "
+                                             "ORDER BY created_at ASC";
+                    if (mysql_query(conn, task_query.c_str())) continue;
+                    
+                    MYSQL_RES* task_res = mysql_store_result(conn);
+                    if (!task_res || mysql_num_rows(task_res) == 0) {
+                        if (task_res) mysql_free_result(task_res);
+                        continue;
+                    }
 
-            bool success = DownloadService::download_file(task.file_id, task.dest);
+                    MYSQL_ROW first_task = mysql_fetch_row(task_res);
+                    std::string oldest_created = first_task[3];
+                    
+                    std::string time_check = "SELECT (UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP('" + oldest_created + "')) * 1000";
+                    mysql_query(conn, time_check.c_str());
+                    MYSQL_RES* time_res = mysql_store_result(conn);
+                    double elapsed_ms = 0;
+                    if (time_res) {
+                        MYSQL_ROW time_row = mysql_fetch_row(time_res);
+                        if (time_row && time_row[0]) elapsed_ms = std::stod(time_row[0]);
+                        mysql_free_result(time_res);
+                    }
 
-            std::string final_status = success ? "success" : "failed";
-            std::string local_url = success ? "file://" + escape_string(conn, task.dest) : "";
-            
-            std::string up_task = "UPDATE tasks SET status = '" + final_status + "', local_url = '" + local_url + "' WHERE id = '" + task.id + "'";
-            mysql_query(conn, up_task.c_str());
-        }
+                    if (elapsed_ms >= b.wait_ms) {
+                        struct TaskInfo { std::string id, file_id, dest; };
+                        std::vector<TaskInfo> tasks_to_do;
+                        tasks_to_do.push_back({first_task[0], first_task[1], first_task[2]});
+                        
+                        MYSQL_ROW t_row;
+                        while ((t_row = mysql_fetch_row(task_res))) {
+                            tasks_to_do.push_back({t_row[0], t_row[1], t_row[2]});
+                        }
+                        mysql_free_result(task_res);
 
-        std::string final_batch = "UPDATE batches SET status = 'awaiting' WHERE id = '" + batch_id + "'";
-        mysql_query(conn, final_batch.c_str());
-        CROW_LOG_INFO << "Background processing moved batch to awaiting: " << batch_id;
-    }).detach();
+                        std::thread([tasks_to_do, b_id = b.id]() {
+                            MYSQL* t_conn = DatabaseService::get_instance().get_connection();
+                            for (const auto& t : tasks_to_do) {
+                                mysql_query(t_conn, ("UPDATE tasks SET status = 'downloading' WHERE id = '" + t.id + "'").c_str());
+                                bool success = DownloadService::download_file(t.file_id, t.dest);
+                                std::string status = success ? "success" : "failed";
+                                std::string local_url = success ? "file://" + escape_string(t_conn, t.dest) : "";
+                                mysql_query(t_conn, ("UPDATE tasks SET status = '" + status + "', local_url = '" + local_url + "' WHERE id = '" + t.id + "'").c_str());
+                            }
+                            CROW_LOG_INFO << "Processed " << tasks_to_do.size() << " tasks for batch " << b_id;
+                        }).detach();
+                    } else {
+                        mysql_free_result(task_res);
+                    }
+                }
+            }
+        }).detach();
+    });
     
     return true;
 }
