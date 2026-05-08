@@ -84,10 +84,14 @@ void setup(crow::SimpleApp& app) {
         }
     });
 
-    // GET /v1/ingested - Get all ingested files metadata
-    CROW_ROUTE(app, "/v1/ingested").methods(crow::HTTPMethod::GET)([&manager]() {
-        auto tasks = manager.get_ingested_tasks();
-        return utils::json_response(tasks);
+    // GET /v1/ingested/{task_id} - Get specific ingested file metadata and waveform
+    CROW_ROUTE(app, "/v1/ingested/<string>").methods(crow::HTTPMethod::GET)([&manager](std::string task_id) {
+        auto task = manager.get_ingested_task(task_id);
+        if (task) {
+            return utils::json_response(*task);
+        } else {
+            return utils::error_response("Ingested task not found", 404);
+        }
     });
 }
 

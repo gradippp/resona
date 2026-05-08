@@ -399,7 +399,7 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
 
     // Fetch tasks with metadata and waveform
     std::string task_query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, "
-                             "m.file_size, m.format, m.duration_seconds, w.waveform_data "
+                             "m.file_size, m.format, m.duration_seconds, w.waveform_data, w.resolution "
                              "FROM tasks t "
                              "LEFT JOIN media_metadata m ON t.id = m.task_id "
                              "LEFT JOIN waveforms w ON t.id = w.task_id "
@@ -417,7 +417,7 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
                 t.local_url = task_row[4] ? task_row[4] : "";
                 
                 // Metadata
-                if (task_row[5]) { // If file_size is present, assume metadata exists
+                if (task_row[5]) { 
                     models::TaskMetadata meta;
                     meta.file_size = std::stoll(task_row[5]);
                     meta.format = task_row[6] ? task_row[6] : "";
@@ -429,6 +429,7 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
                 if (task_row[8]) {
                     try {
                         t.waveform = json::parse(task_row[8]).get<std::vector<float>>();
+                        t.waveform_resolution = task_row[9] ? std::stoi(task_row[9]) : 0;
                     } catch (...) {}
                 }
                 
@@ -441,42 +442,51 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     return b;
 }
 
-std::vector<models::Task> BatchManager::get_ingested_tasks() {
+std::optional<models::Task> BatchManager::get_ingested_task(const std::string& task_id) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
-    std::vector<models::Task> ingested_tasks;
 
     std::string query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, "
-                        "m.file_size, m.format, m.duration_seconds "
+                        "m.file_size, m.format, m.duration_seconds, w.waveform_data, w.resolution "
                         "FROM tasks t "
                         "LEFT JOIN media_metadata m ON t.id = m.task_id "
-                        "WHERE t.status = 'success'";
+                        "LEFT JOIN waveforms w ON t.id = w.task_id "
+                        "WHERE t.id = '" + task_id + "'";
     
-    if (!mysql_query(conn, query.c_str())) {
-        MYSQL_RES* res = mysql_store_result(conn);
-        if (res) {
-            while (MYSQL_ROW row = mysql_fetch_row(res)) {
-                models::Task t;
-                t.id = row[0];
-                t.file_id = row[1];
-                t.destination_path = row[2];
-                t.status = row[3];
-                t.local_url = row[4] ? row[4] : "";
-                
-                if (row[5]) {
-                    models::TaskMetadata meta;
-                    meta.file_size = std::stoll(row[5]);
-                    meta.format = row[6] ? row[6] : "";
-                    meta.duration_seconds = std::stof(row[7]);
-                    t.metadata = meta;
-                }
-                
-                ingested_tasks.push_back(t);
-            }
-            mysql_free_result(res);
-        }
+    if (mysql_query(conn, query.c_str())) return std::nullopt;
+    
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (!res) return std::nullopt;
+    
+    MYSQL_ROW row = mysql_fetch_row(res);
+    if (!row) {
+        mysql_free_result(res);
+        return std::nullopt;
     }
-
-    return ingested_tasks;
+    
+    models::Task t;
+    t.id = row[0];
+    t.file_id = row[1];
+    t.destination_path = row[2];
+    t.status = row[3];
+    t.local_url = row[4] ? row[4] : "";
+    
+    if (row[5]) {
+        models::TaskMetadata meta;
+        meta.file_size = std::stoll(row[5]);
+        meta.format = row[6] ? row[6] : "";
+        meta.duration_seconds = std::stof(row[7]);
+        t.metadata = meta;
+    }
+    
+    if (row[8]) {
+        try {
+            t.waveform = json::parse(row[8]).get<std::vector<float>>();
+            t.waveform_resolution = row[9] ? std::stoi(row[9]) : 0;
+        } catch (...) {}
+    }
+    
+    mysql_free_result(res);
+    return t;
 }
 
 } // namespace services

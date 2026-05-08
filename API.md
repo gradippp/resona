@@ -48,10 +48,10 @@ Initialize a new ingestion batch with specific configuration options.
   "max_batch_storage": "5G",
   "allowed_services": ["GOOGLE_DRIVE", "DROPBOX", "DIRECT"],
   "delete_after": "24H",
-  "waveform_resolution": 256
+  "waveform_resolution": 512
 }
 ```
-*Note: `delete_after` is **required** and supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). Source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the number of peak data points to extract (default is 256).*
+*Note: `delete_after` is **required** and supports values like `24H` (hours), `30m` (minutes), or `60s` (seconds). Source files will be automatically deleted after the specified duration once the batch is completed. `waveform_resolution` specifies the number of peak data points to extract (default is 512).*
 
 **Response (200 OK):**
 ```json
@@ -116,7 +116,7 @@ Retrieve the current status of a batch and the results (metadata/waveforms) of i
     "max_batch_storage": "5G",
     "allowed_services": ["GOOGLE_DRIVE"],
     "delete_after": "24H",
-    "waveform_resolution": 256
+    "waveform_resolution": 512
   },
   "tasks": [
     {
@@ -130,7 +130,8 @@ Retrieve the current status of a batch and the results (metadata/waveforms) of i
         "format": "WAV",
         "duration_seconds": 120.5
       },
-      "waveform": [0.1, 0.45, 0.9, 0.2, "..."]
+      "waveform": [0.1, 0.45, 0.9, 0.2, "..."],
+      "waveform_resolution": 512
     }
   ]
 }
@@ -150,28 +151,28 @@ Finalize a batch and mark it as completed. No more tasks can be added, and the c
 }
 ```
 
-### 3.6. List All Ingested Data
-Retrieve metadata for all successfully ingested files across all batches.
+### 3.6. Get Specific Ingested Data
+Retrieve metadata and waveform for a specific successfully ingested file.
 
 **Request:**
-`GET /v1/ingested`
+`GET /v1/ingested/{task_id}`
 
 **Response (200 OK):**
 ```json
-[
-  {
-    "id": "task-uuid",
-    "file_id": "https://...",
-    "destination_path": "C:\\Data\\file.wav",
-    "status": "success",
-    "local_url": "file://C:/Data/file.wav",
-    "metadata": {
-      "file_size": 1048576,
-      "format": "WAV",
-      "duration_seconds": 120.5
-    }
-  }
-]
+{
+  "id": "task-uuid",
+  "file_id": "https://...",
+  "destination_path": "C:\\Data\\file.wav",
+  "status": "success",
+  "local_url": "file://C:/Data/file.wav",
+  "metadata": {
+    "file_size": 1048576,
+    "format": "WAV",
+    "duration_seconds": 120.5
+  },
+  "waveform": [0.1, 0.45, 0.9, 0.2, "..."],
+  "waveform_resolution": 512
+}
 ```
 
 ---

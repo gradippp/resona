@@ -119,21 +119,15 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto final_status_res = cpr::Get(cpr::Url{"http://localhost:8081/v1/batch/" + batch_id});
         REQUIRE(json::parse(final_status_res.text)["status"] == "completed");
 
-        // 7. Verify /v1/ingested
-        auto ingested_res = cpr::Get(cpr::Url{"http://localhost:8081/v1/ingested"});
+        // 7. Verify /v1/ingested/{task_id}
+        std::string task_id = status_json1["tasks"][0]["id"];
+        auto ingested_res = cpr::Get(cpr::Url{"http://localhost:8081/v1/ingested/" + task_id});
         REQUIRE(ingested_res.status_code == 200);
         auto ingested_json = json::parse(ingested_res.text);
-        REQUIRE(ingested_json.is_array());
         
-        bool found = false;
-        for (const auto& item : ingested_json) {
-            if (item["id"] == status_json1["tasks"][0]["id"]) {
-                found = true;
-                // Just check it exists in the list
-                break;
-            }
-        }
-        REQUIRE(found);
+        REQUIRE(ingested_json["id"] == task_id);
+        REQUIRE(ingested_json.contains("metadata"));
+        // waveform_resolution will be 0 here because it's not a real media file
     }
 
     SECTION("Adding a task to a non-existent batch fails") {
