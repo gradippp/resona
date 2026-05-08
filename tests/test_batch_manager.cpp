@@ -82,4 +82,34 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         batch = manager.get_batch(batch_id);
         REQUIRE(batch->status == "completed");
     }
+
+    SECTION("Allowed Services Enforcement") {
+        models::CreateBatchRequest req;
+        req.allowed_services = {"DROPBOX"};
+        std::string batch_id = manager.create_batch(req);
+
+        // Dropbox URL should succeed
+        models::AddTaskRequest task1;
+        task1.file_id = "https://www.dropbox.com/s/123/file.wav?dl=0";
+        task1.destination_path = "test1.wav";
+        REQUIRE(manager.add_task(batch_id, task1));
+
+        // Google Drive URL should fail
+        models::AddTaskRequest task2;
+        task2.file_id = "https://drive.google.com/file/d/abc/view";
+        task2.destination_path = "test2.wav";
+        REQUIRE(!manager.add_task(batch_id, task2));
+
+        // Any URL should fail if not dropbox
+        models::AddTaskRequest task3;
+        task3.file_id = "https://example.com/file.wav";
+        task3.destination_path = "test3.wav";
+        REQUIRE(!manager.add_task(batch_id, task3));
+
+        // New batch with multiple allowed
+        req.allowed_services = {"DROPBOX", "GOOGLE_DRIVE"};
+        std::string batch_id2 = manager.create_batch(req);
+        REQUIRE(manager.add_task(batch_id2, task1));
+        REQUIRE(manager.add_task(batch_id2, task2));
+    }
 }

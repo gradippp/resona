@@ -117,6 +117,15 @@ std::string DownloadService::format_url(const std::string& url) {
         } else if (query.find("dl=1") == std::string::npos) {
             formatted = url + "&dl=1";
         }
+        return formatted;
+    }
+
+    // Handle Google Drive URLs
+    std::regex gd_regex(R"(https?://(?:www\.)?drive\.google\.com/file/d/([^/?#]+)(?:/.*)?)", std::regex::icase);
+    if (std::regex_search(url, match, gd_regex)) {
+        std::string file_id = match[1].str();
+        formatted = "https://drive.google.com/uc?export=download&id=" + file_id;
+        return formatted;
     }
     
     return formatted;

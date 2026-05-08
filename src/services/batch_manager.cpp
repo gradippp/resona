@@ -63,8 +63,8 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
 bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRequest& req) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     
-    // Check if batch exists and is pending
-    std::string check_query = "SELECT status FROM batches WHERE id = '" + batch_id + "'";
+    // Check if batch exists and get its status and options
+    std::string check_query = "SELECT status, options FROM batches WHERE id = '" + batch_id + "'";
     if (mysql_query(conn, check_query.c_str())) return false;
     
     MYSQL_RES* res = mysql_store_result(conn);
@@ -78,12 +78,35 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     }
     
     std::string status = row[0];
+    std::string options_str = row[1] ? row[1] : "{}";
     mysql_free_result(res);
     
     if (status != "pending" && status != "awaiting") {
         CROW_LOG_WARNING << "Attempted to add task to batch that is " << status << ": " << batch_id;
         return false;
     }
+
+    // Enforce allowed_services
+    try {
+        json opts = json::parse(options_str);
+        std::vector<std::string> allowed = opts.value("allowed_services", std::vector<std::string>{});
+        if (!allowed.empty()) {
+            bool service_allowed = false;
+            for (const auto& svc : allowed) {
+                if (svc == "DROPBOX" && req.file_id.find("dropbox.com") != std::string::npos) {
+                    service_allowed = true;
+                    break;
+                } else if (svc == "GOOGLE_DRIVE" && req.file_id.find("drive.google.com") != std::string::npos) {
+                    service_allowed = true;
+                    break;
+                }
+            }
+            if (!service_allowed) {
+                CROW_LOG_WARNING << "Service not allowed for URL: " << req.file_id;
+                return false;
+            }
+        }
+    } catch (...) {}
 
     std::string task_id = utils::generate_uuid_v4();
     
@@ -315,17 +338,19 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     
     models::Batch b;
     b.id = batch_id;
-    b.status = row[0];
+    b.status = row[0] ? row[0] : "unknown";
     
     try {
-        json options = json::parse(row[1]);
-        b.options.wait_duration = options.value("wait_duration", 0);
-        b.options.max_retries = options.value("max_retries", 0);
-        b.options.max_batch_size = options.value("max_batch_size", 0);
-        b.options.max_batch_storage = options.value("max_batch_storage", "");
-        b.options.allowed_services = options.value("allowed_services", std::vector<std::string>{});
-        b.options.delete_after = options.value("delete_after", "");
-        b.options.waveform_resolution = options.value("waveform_resolution", 256);
+        if (row[1]) {
+            json options = json::parse(row[1]);
+            b.options.wait_duration = options.value("wait_duration", 0);
+            b.options.max_retries = options.value("max_retries", 0);
+            b.options.max_batch_size = options.value("max_batch_size", 0);
+            b.options.max_batch_storage = options.value("max_batch_storage", "");
+            b.options.allowed_services = options.value("allowed_services", std::vector<std::string>{});
+            b.options.delete_after = options.value("delete_after", "");
+            b.options.waveform_resolution = options.value("waveform_resolution", 256);
+        }
     } catch (...) {}
     
     mysql_free_result(res);
