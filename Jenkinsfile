@@ -13,7 +13,8 @@ pipeline {
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     
                     // Extract version from CMakeLists.txt using awk
-                    env.PROJECT_VERSION = sh(script: "awk '/VERSION/ {print $2}' CMakeLists.txt | tr -d ' \\r\\n'", returnStdout: true).trim()
+                    env.PROJECT_VERSION = sh(script: "awk '/VERSION/ {print \$2}' CMakeLists.txt | tr -d ' \\r\\n'", returnStdout: true).trim()
+
                     if (!env.PROJECT_VERSION) {
                         env.PROJECT_VERSION = 'latest'
                     }
