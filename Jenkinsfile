@@ -4,8 +4,8 @@ pipeline {
     environment {
         IMAGE_NAME = 'resona'
         // Look up the registry URL from secret text
-        DOCKER_REGISTRY_URL = credentials('registry_url')
-        DOCKER_CREDS_ID = 'registry_cred' 
+        DOCKER_REGISTRY_URL = credentials('registry-url')
+        DOCKER_CREDS_ID = 'registry-cred' 
     }
 
     stages {
