@@ -21,6 +21,12 @@ All non-200 series responses follow this standard structure:
 - `400 Bad Request`: Validation failed (e.g., missing required fields, batch full).
 - `404 Not Found`: The requested Batch or Task UUID does not exist.
 
+**Note on Batch Statuses:**
+Batches transition through several states: `pending` $\rightarrow$ `awaiting` $\rightarrow$ `completed` $\rightarrow$ `deleted`.
+- `awaiting`: The batch is active and processing tasks.
+- `completed`: The batch is finalized, downloads are finished, and the `delete_after` timer is active.
+- `deleted`: The batch's local files and directory have been permanently removed by the cleanup worker.
+
 **Note on Task Statuses:** 
 Tasks transition through several states: `pending` $\rightarrow$ `processing` $\rightarrow$ `downloading` $\rightarrow$ `success` or `failed`. 
 - `processing`: The task is in the active batch queue and waiting for its turn in the sequential processing loop.

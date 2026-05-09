@@ -220,6 +220,7 @@ bool BatchManager::start_batch(const std::string& batch_id) {
     
     static std::once_flag monitor_started;
     std::call_once(monitor_started, [this]() {
+        // Task Processing Monitor
         std::thread([this]() {
             while (true) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -431,6 +432,52 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                 }
             }
         }).detach();
+
+        // Cleanup Monitor
+        std::thread([this]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::seconds(60));
+                
+                MYSQL* conn = DatabaseService::get_instance().get_connection();
+                std::vector<std::string> to_delete;
+
+                {
+                    std::lock_guard<std::mutex> lock(db_mutex_);
+                    std::string cleanup_query = "SELECT id FROM batches WHERE status = 'completed' AND delete_at IS NOT NULL AND delete_at <= NOW()";
+                    if (!mysql_query(conn, cleanup_query.c_str())) {
+                        MYSQL_RES* res = mysql_store_result(conn);
+                        if (res) {
+                            MYSQL_ROW row;
+                            while ((row = mysql_fetch_row(res))) {
+                                to_delete.push_back(row[0]);
+                            }
+                            mysql_free_result(res);
+                        }
+                    }
+                }
+
+                for (const auto& b_id : to_delete) {
+                    CROW_LOG_INFO << "Cleanup Monitor: Deleting expired batch " << b_id;
+                    
+                    std::filesystem::path base_dir = ".";
+                    const char* storage_dir = std::getenv("STORAGE_DIRECTORY");
+                    if (storage_dir != nullptr) base_dir = storage_dir;
+                    
+                    std::filesystem::path batch_dir = base_dir / b_id;
+                    try {
+                        if (std::filesystem::exists(batch_dir)) {
+                            std::filesystem::remove_all(batch_dir);
+                        }
+                        
+                        std::lock_guard<std::mutex> lock(db_mutex_);
+                        std::string update_query = "UPDATE batches SET status = 'deleted', delete_at = NULL WHERE id = '" + b_id + "'";
+                        mysql_query(conn, update_query.c_str());
+                    } catch (const std::exception& e) {
+                        CROW_LOG_ERROR << "Cleanup Monitor: Failed to delete " << batch_dir.string() << ": " << e.what();
+                    }
+                }
+            }
+        }).detach();
     });
     
     return true;
@@ -440,9 +487,38 @@ bool BatchManager::complete_batch(const std::string& batch_id) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     std::string escaped_batch_id = escape_string(conn, batch_id);
     
+    // 1. Get delete_after duration from options first
+    long long delete_after_seconds = 0;
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        std::string query = "UPDATE batches SET status = 'completed' WHERE id = '" + escaped_batch_id + "' AND status = 'awaiting'";
+        std::string check_query = "SELECT options FROM batches WHERE id = '" + escaped_batch_id + "'";
+        if (!mysql_query(conn, check_query.c_str())) {
+            MYSQL_RES* res = mysql_store_result(conn);
+            if (res) {
+                MYSQL_ROW row = mysql_fetch_row(res);
+                if (row) {
+                    try {
+                        json opts = json::parse(row[0]);
+                        delete_after_seconds = parse_duration(opts.value("delete_after", "0s")).count();
+                    } catch (...) {}
+                }
+                mysql_free_result(res);
+            }
+        }
+    }
+
+    // 2. Update status and set delete_at
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        std::string query;
+        if (delete_after_seconds > 0) {
+            query = "UPDATE batches SET status = 'completed', delete_at = DATE_ADD(NOW(), INTERVAL " + 
+                    std::to_string(delete_after_seconds) + " SECOND) "
+                    "WHERE id = '" + escaped_batch_id + "' AND status = 'awaiting'";
+        } else {
+            query = "UPDATE batches SET status = 'completed' WHERE id = '" + escaped_batch_id + "' AND status = 'awaiting'";
+        }
+        
         if (mysql_query(conn, query.c_str())) return false;
         
         if (mysql_affected_rows(conn) == 0) {
@@ -451,26 +527,7 @@ bool BatchManager::complete_batch(const std::string& batch_id) {
         }
     }
 
-    CROW_LOG_INFO << "Batch " << batch_id << " marked as completed";
-
-    auto batch_opt = get_batch(batch_id);
-    if (batch_opt) {
-        auto delay = parse_duration(batch_opt->options.delete_after);
-        if (delay.count() > 0) {
-            std::thread([batch_id, delay, this]() {
-                std::this_thread::sleep_for(delay);
-                auto b = get_batch(batch_id);
-                if (b) {
-                    for (const auto& t : b->tasks) {
-                        if (t.status == "success") {
-                            std::filesystem::remove(t.destination_path);
-                        }
-                    }
-                }
-            }).detach();
-        }
-    }
-
+    CROW_LOG_INFO << "Batch " << batch_id << " marked as completed (delete scheduled in " << delete_after_seconds << "s)";
     return true;
 }
 
