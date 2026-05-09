@@ -3,6 +3,9 @@ pipeline {
 
     environment {
         IMAGE_NAME = 'resona'
+        // Look up the registry URL and credentials ID from secret text
+        DOCKER_REGISTRY = credentials('DOCKER_REGISTRY_URL_ID')
+        DOCKER_CREDS_ID = 'my-docker-creds' // Keep as ID reference for withRegistry
     }
 
     stages {
@@ -24,11 +27,6 @@ pipeline {
                     env.PROJECT_VERSION = sh(script: "grep -oP 'VERSION\\s+\\K[0-9.]+' CMakeLists.txt | head -1", returnStdout: true).trim()
                     if (!env.PROJECT_VERSION) {
                         env.PROJECT_VERSION = 'latest'
-                    }
-
-                    // Check for required Multibranch properties
-                    if (!env.DOCKER_REGISTRY) {
-                        error "DOCKER_REGISTRY property is missing. Please set it in the Multibranch project properties or global environment."
                     }
 
                     // Define tags (Full path with registry)
