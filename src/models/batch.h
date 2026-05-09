@@ -18,9 +18,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateBatchRequest, wait_duration, max_retrie
 
 struct AddTaskRequest {
     std::string file_id;
-    std::string destination_path;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AddTaskRequest, file_id, destination_path)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AddTaskRequest, file_id)
 
 struct TaskMetadata {
     long long file_size = 0;

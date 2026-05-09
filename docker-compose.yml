@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   resona:
-    build: .
+    build: registry.dev.agradip.fyi/resona:dev
     ports:
       - "8080:8080"
     environment:
@@ -12,7 +12,7 @@ services:
       DB_NAME: resona
       STORAGE_DIRECTORY: /app/data
     volumes:
-      - resona_data:/app/data
+      - ./resona_data:/app/data
     depends_on:
       - mariadb
 
@@ -30,4 +30,3 @@ services:
 
 volumes:
   mariadb_data:
-  resona_data:

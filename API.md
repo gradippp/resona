@@ -21,6 +21,10 @@ All non-200 series responses follow this standard structure:
 - `400 Bad Request`: Validation failed (e.g., missing required fields, batch full).
 - `404 Not Found`: The requested Batch or Task UUID does not exist.
 
+**Note on Task Statuses:** 
+Tasks transition through several states: `pending` $\rightarrow$ `processing` $\rightarrow$ `downloading` $\rightarrow$ `success` or `failed`. 
+- `processing`: The task is in the active batch queue and waiting for its turn in the sequential processing loop.
+
 ---
 
 ## 2. System Endpoints
@@ -35,7 +39,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.1.0"
+  "version": "0.1.1"
 }
 ```
 
@@ -45,8 +49,9 @@ Retrieve the current version and description of the service.
 
 ### 3.1. Storage Directory
 The service uses the `STORAGE_DIRECTORY` environment variable to determine the root folder for all media files. 
-- Leading slashes in `destination_path` are automatically stripped when resolving against the root.
-- Example: `STORAGE_DIRECTORY=C:\Data`, `destination_path=music/song.wav` $\rightarrow$ `C:\Data\music\song.wav`.
+- Files are automatically saved using a structured hierarchy: `${STORAGE_DIRECTORY}/{batch_id}/{task_id}.{ext}`.
+- The extension `{ext}` is derived automatically from the source URL.
+- Example: `STORAGE_DIRECTORY=C:\Data`, `batch_id=b1`, `task_id=t1`, `url=.../song.wav` $\rightarrow$ `C:\Data\b1\t1.wav`.
 
 ---
 
@@ -62,7 +67,7 @@ Initialize a new ingestion batch.
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `delete_after` | string | **Required** | Duration to keep files after completion (e.g., "24H", "30m", "60s"). |
-| `wait_duration` | string | "5s" | How long to wait for more tasks before starting a download cycle (e.g., "10s", "1m"). |
+| `wait_duration` | string | "5s" | Acts as both an initial buffer before processing begins and a cooldown delay between consecutive downloads in the batch. |
 | `max_retries` | int | 3 | Number of times to retry a failed download. |
 | `max_batch_size` | int | 50 | Maximum number of tasks allowed in this batch. |
 | `max_batch_storage` | string | "5G" | Total byte limit for the batch (e.g., "1G", "500M"). |
@@ -87,7 +92,6 @@ Queue a specific media ingestion task.
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `file_id` | string | The source URL (Dropbox, Google Drive, or direct link). |
-| `destination_path` | string | The relative path (within storage directory) to save the file. |
 
 **Response (202 Accepted):**
 ```json
@@ -128,7 +132,7 @@ Retrieve the status and all processed data for tasks in a batch.
     {
       "id": "task-uuid",
       "file_id": "https://...",
-      "destination_path": "...",
+      "destination_path": "/app/data/b1/t1.wav",
       "status": "success",
       "local_url": "file:///...",
       "metadata": {
