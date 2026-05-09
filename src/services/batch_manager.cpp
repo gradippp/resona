@@ -156,16 +156,13 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
 
     std::string task_id = utils::generate_uuid_v4();
     
-    // Handle STORAGE_DIRECTORY env var
+    // Handle STORAGE_DIRECTORY env var: store as base_dir/batch_id/task_id.ext
     std::filesystem::path dest_path = req.destination_path;
     const char* storage_dir = std::getenv("STORAGE_DIRECTORY");
     if (storage_dir != nullptr) {
         std::filesystem::path base_dir(storage_dir);
-        std::string rel_path = req.destination_path;
-        if (!rel_path.empty() && (rel_path[0] == '/' || rel_path[0] == '\\')) {
-            rel_path = rel_path.substr(1);
-        }
-        dest_path = base_dir / rel_path;
+        std::string ext = std::filesystem::path(req.destination_path).extension().string();
+        dest_path = base_dir / batch_id / (task_id + ext);
     }
 
     std::string insert_query = "INSERT INTO tasks (id, batch_id, file_id, destination_path, status) VALUES ('" +
