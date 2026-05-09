@@ -273,10 +273,17 @@ bool BatchManager::start_batch(const std::string& batch_id) {
 
                         if (elapsed_ms >= wait_duration_ms) {
                             tasks_to_do.push_back({first_task[0], first_task[1], first_task[2]});
+                            std::string update_list = "'" + std::string(first_task[0]) + "'";
+                            
                             MYSQL_ROW t_row;
                             while ((t_row = mysql_fetch_row(task_res))) {
                                 tasks_to_do.push_back({t_row[0], t_row[1], t_row[2]});
+                                update_list += ",'" + std::string(t_row[0]) + "'";
                             }
+
+                            // Eagerly mark tasks as processing to prevent next poll from picking them up
+                            std::string mark_query = "UPDATE tasks SET status = 'processing' WHERE id IN (" + update_list + ")";
+                            mysql_query(conn, mark_query.c_str());
                         }
                         mysql_free_result(task_res);
                     }
@@ -287,6 +294,7 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                             
                             int max_retries = 3;
                             long long max_bytes = 0;
+                            long long inter_task_delay_ms = 5000;
                             {
                                 std::lock_guard<std::mutex> lock(db_mutex_);
                                 std::string opt_query = "SELECT options FROM batches WHERE id = '" + b_id + "'";
@@ -299,6 +307,7 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                                 json opts = json::parse(opt_row[0]);
                                                 max_retries = opts.value("max_retries", 3);
                                                 max_bytes = utils::parse_size_string(opts.value("max_batch_storage", "0"));
+                                                inter_task_delay_ms = parse_duration_ms(opts.value("wait_duration", "5s")).count();
                                             } catch (...) {}
                                         }
                                         mysql_free_result(opt_res);
@@ -306,7 +315,8 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                 }
                             }
 
-                            for (const auto& t : tasks_to_do) {
+                            for (size_t i = 0; i < tasks_to_do.size(); ++i) {
+                                const auto& t = tasks_to_do[i];
                                 {
                                     std::lock_guard<std::mutex> lock(db_mutex_);
                                     mysql_query(t_conn, ("UPDATE tasks SET status = 'downloading' WHERE id = '" + t.id + "'").c_str());
@@ -377,6 +387,11 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                                                  "ON DUPLICATE KEY UPDATE waveform_data=VALUES(waveform_data), resolution=VALUES(resolution)";
                                         mysql_query(t_conn, wave_query.c_str());
                                     }
+                                }
+
+                                // Apply inter-task delay if not the last task
+                                if (i < tasks_to_do.size() - 1) {
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(inter_task_delay_ms));
                                 }
                             }
                             CROW_LOG_INFO << "Processed " << tasks_to_do.size() << " tasks for batch " << b_id;

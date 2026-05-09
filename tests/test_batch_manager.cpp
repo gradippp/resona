@@ -7,23 +7,6 @@
 #include <iostream>
 
 TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
-    // Initialize database for testing
-    static bool db_initialized = false;
-    if (!db_initialized) {
-        try {
-            auto& db = services::DatabaseService::get_instance();
-            try {
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            } catch (...) {
-                db.initialize("127.0.0.1", 3307, "root", "root", "");
-                mysql_query(db.get_connection(), "CREATE DATABASE IF NOT EXISTS resona");
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            }
-            db.initialize_schema();
-            db_initialized = true;
-        } catch (...) {}
-    }
-
     auto& manager = services::BatchManager::get_instance();
 
     SECTION("Create Batch") {

@@ -33,7 +33,7 @@ struct Task {
     std::string id;
     std::string file_id;
     std::string destination_path;
-    std::string status = "pending"; // pending, downloading, success, failed
+    std::string status = "pending"; // pending, processing, downloading, success, failed
     std::string local_url = "";
     std::optional<TaskMetadata> metadata;
     std::vector<float> waveform;
