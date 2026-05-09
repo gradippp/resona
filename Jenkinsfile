@@ -4,8 +4,8 @@ pipeline {
     environment {
         IMAGE_NAME = 'resona'
         // Look up the registry URL from secret text
-        DOCKER_REGISTRY_URL = credentials('DOCKER_REGISTRY_URL')
-        DOCKER_CREDS_ID = 'docker-private-registry-creds' 
+        DOCKER_REGISTRY_URL = credentials('registry_url')
+        DOCKER_CREDS_ID = 'registry_cred' 
     }
 
     stages {
