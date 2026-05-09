@@ -3,9 +3,9 @@ pipeline {
 
     environment {
         IMAGE_NAME = 'resona'
-        // Look up the registry URL and credentials ID from secret text
-        DOCKER_REGISTRY = credentials('DOCKER_REGISTRY_URL_ID')
-        DOCKER_CREDS_ID = 'my-docker-creds' // Keep as ID reference for withRegistry
+        // Look up the registry URL from secret text
+        DOCKER_REGISTRY_URL = credentials('DOCKER_REGISTRY_URL')
+        DOCKER_CREDS_ID = 'docker-private-registry-creds' 
     }
 
     stages {
@@ -30,14 +30,11 @@ pipeline {
                     }
 
                     // Define tags (Full path with registry)
-                    env.BASE_IMAGE = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}"
+                    env.BASE_IMAGE = "${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}"
                     
                     env.IMAGE_TAG_COMMIT = "${env.BASE_IMAGE}:${env.GIT_COMMIT_SHORT}"
                     env.IMAGE_TAG_VERSION = "${env.BASE_IMAGE}:${env.PROJECT_VERSION}"
                     env.IMAGE_TAG_BRANCH = "${env.BASE_IMAGE}:${env.BRANCH_NAME}"
-
-                    // Architecture-specific tags
-                    env.ARCH_SUFFIX = "" // To be set in parallel stages
                 }
             }
         }
@@ -61,7 +58,7 @@ pipeline {
                             ])
                             sh 'git submodule update --init --recursive --depth 1'
                             
-                            docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
+                            docker.withRegistry("https://${env.DOCKER_REGISTRY_URL}", env.DOCKER_CREDS_ID) {
                                 def customImage = docker.build("${env.IMAGE_TAG_COMMIT}-arm64")
                                 customImage.push()
                                 customImage.push("${env.PROJECT_VERSION}-arm64")
@@ -82,7 +79,7 @@ pipeline {
                             ])
                             sh 'git submodule update --init --recursive --depth 1'
                             
-                            docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
+                            docker.withRegistry("https://${env.DOCKER_REGISTRY_URL}", env.DOCKER_CREDS_ID) {
                                 def customImage = docker.build("${env.IMAGE_TAG_COMMIT}-amd64")
                                 customImage.push()
                                 customImage.push("${env.PROJECT_VERSION}-amd64")
@@ -104,7 +101,7 @@ pipeline {
             agent { label 'arm64' }
             steps {
                 script {
-                    docker.withRegistry("https://${env.DOCKER_REGISTRY}", env.DOCKER_CREDS_ID) {
+                    docker.withRegistry("https://${env.DOCKER_REGISTRY_URL}", env.DOCKER_CREDS_ID) {
                         sh '''
                         # Manifest for Commit
                         docker manifest create $IMAGE_TAG_COMMIT \
