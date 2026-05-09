@@ -1,0 +1,17 @@
+node_modules
+.git
+.vs
+build
+build2
+out
+test_api_dl.json
+test_audio.wav
+*.sln
+*.vcxproj
+*.user
+*.filters
+*.pdb
+*.obj
+*.exe
+*.dll
+*.lib

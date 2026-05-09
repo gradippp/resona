@@ -1,0 +1,18 @@
+[submodule "third_party/crow"]
+	path = third_party/crow
+	url = https://github.com/CrowCpp/Crow.git
+[submodule "third_party/json"]
+	path = third_party/json
+	url = https://github.com/nlohmann/json.git
+[submodule "third_party/cpr"]
+	path = third_party/cpr
+	url = https://github.com/libcpr/cpr.git
+[submodule "third_party/asio"]
+	path = third_party/asio
+	url = https://github.com/chriskohlhoff/asio.git
+[submodule "third_party/catch2"]
+	path = third_party/catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "third_party/mariadb-connector-c"]
+	path = third_party/mariadb-connector-c
+	url = https://github.com/mariadb-corporation/mariadb-connector-c.git
