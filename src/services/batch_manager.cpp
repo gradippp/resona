@@ -332,7 +332,31 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                                 bool success = false;
                                 int attempts = 0;
                                 while (attempts <= max_retries) {
-                                    DownloadResult dl_res = DownloadService::download_file(t.file_id, t.dest, max_bytes);
+                                    long long allowed_bytes = max_bytes;
+                                    if (max_bytes > 0) {
+                                        long long current_batch_size = 0;
+                                        {
+                                            std::lock_guard<std::mutex> lock(db_mutex_);
+                                            std::string size_query = "SELECT SUM(m.file_size) FROM media_metadata m JOIN tasks t ON m.task_id = t.id WHERE t.batch_id = '" + b_id + "'";
+                                            if (!mysql_query(t_conn, size_query.c_str())) {
+                                                MYSQL_RES* size_res = mysql_store_result(t_conn);
+                                                if (size_res) {
+                                                    MYSQL_ROW size_row = mysql_fetch_row(size_res);
+                                                    if (size_row && size_row[0]) {
+                                                        current_batch_size = std::stoll(size_row[0]);
+                                                    }
+                                                    mysql_free_result(size_res);
+                                                }
+                                            }
+                                        }
+                                        allowed_bytes = max_bytes - current_batch_size;
+                                        if (allowed_bytes <= 0) {
+                                            CROW_LOG_WARNING << "Task " << t.id << " failed: Batch storage limit exceeded";
+                                            break;
+                                        }
+                                    }
+
+                                    DownloadResult dl_res = DownloadService::download_file(t.file_id, t.dest, allowed_bytes);
                                     if (dl_res.success) {
                                         success = true;
                                         break;
