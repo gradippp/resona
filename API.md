@@ -168,4 +168,4 @@ Same object schema as an individual item in the `tasks` array from section 4.4.
 ---
 
 ## 6. Licenses
-This project is licensed under the **DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE (WTFPL)**.
+This project is licensed under the **MIT License**.
