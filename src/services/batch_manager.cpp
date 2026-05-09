@@ -679,7 +679,7 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
                 mysql_stmt_bind_result(stmt, res_bind_tasks);
                 while (!mysql_stmt_fetch(stmt)) {
                     models::Task t; t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(t_s_buf, t_s_len); t.local_url = std::string(url_buf.data(), url_len);
-                    if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = fmt_null ? "" : std::string(fmt_buf, fmt_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
+                    if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
                     if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
                     b.tasks.push_back(t);
                 }
@@ -703,20 +703,20 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
             mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt); mysql_stmt_store_result(stmt);
             if (mysql_stmt_num_rows(stmt) == 0) { mysql_stmt_close(stmt); return std::nullopt; }
             MYSQL_BIND res_bind[10]; memset(res_bind, 0, sizeof(res_bind));
-            char id_buf[37]; unsigned long id_len; std::vector<char> f_id_buf(2048); unsigned long f_id_len; std::vector<char> dest_buf(2048); unsigned long dest_len; char s_buf[21]; unsigned long s_len; std::vector<char> url_buf(2048); unsigned long url_len; long long f_size = 0; char f_size_null; char fmt_buf[11]; unsigned long format_len; char format_null; float dur = 0; char dur_null; std::vector<char> w_buf(1024*1024); unsigned long w_len; char w_null; int res_val = 0; char res_null;
+            char id_buf[37]; unsigned long id_len; std::vector<char> f_id_buf(2048); unsigned long f_id_len; std::vector<char> dest_buf(2048); unsigned long dest_len; char s_buf[21]; unsigned long s_len; std::vector<char> url_buf(2048); unsigned long url_len; long long f_size = 0; char f_size_null; char format_buf[11]; unsigned long format_len; char format_null; float dur = 0; char dur_null; std::vector<char> w_buf(1024*1024); unsigned long w_len; char w_null; int res_val = 0; char res_null;
             res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
             res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
             res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = dest_buf.data(); res_bind[2].buffer_length = dest_buf.size(); res_bind[2].length = &dest_len;
             res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = s_buf; res_bind[3].buffer_length = sizeof(s_buf); res_bind[3].length = &s_len;
             res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = url_buf.data(); res_bind[4].buffer_length = url_buf.size(); res_bind[4].length = &url_len;
             res_bind[5].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[5].buffer = &f_size; res_bind[5].is_null = (char*)&f_size_null;
-            res_bind[6].buffer_type = MYSQL_TYPE_STRING; res_bind[6].buffer = format_buf; res_bind[6].buffer_length = sizeof(format_buf); res_bind[6].length = &fmt_len; res_bind[6].is_null = (char*)&format_null;
+            res_bind[6].buffer_type = MYSQL_TYPE_STRING; res_bind[6].buffer = format_buf; res_bind[6].buffer_length = sizeof(format_buf); res_bind[6].length = &format_len; res_bind[6].is_null = (char*)&format_null;
             res_bind[7].buffer_type = MYSQL_TYPE_FLOAT; res_bind[7].buffer = &dur; res_bind[7].is_null = (char*)&dur_null;
             res_bind[8].buffer_type = MYSQL_TYPE_BLOB; res_bind[8].buffer = w_buf.data(); res_bind[8].buffer_length = w_buf.size(); res_bind[8].length = &w_len; res_bind[8].is_null = (char*)&w_null;
             res_bind[9].buffer_type = MYSQL_TYPE_LONG; res_bind[9].buffer = &res_val; res_bind[9].is_null = (char*)&res_null;
             mysql_stmt_bind_result(stmt, res_bind); mysql_stmt_fetch(stmt);
             t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len); t.local_url = std::string(url_buf.data(), url_len);
-            if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = fmt_null ? "" : std::string(fmt_buf, fmt_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
+            if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
             if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
             mysql_stmt_close(stmt);
         }

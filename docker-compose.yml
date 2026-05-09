@@ -5,11 +5,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DB_HOST: mariadb
-      DB_PORT: 3306
-      DB_USER: resona_user
-      DB_PASS: resona_password
-      DB_NAME: resona
+      DATABASE_URL: mysql://resona_user:resona_password@mariadb:3306/resona
       STORAGE_DIRECTORY: /app/data
     volumes:
       - ./resona_data:/app/data

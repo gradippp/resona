@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 project(resona 
-    VERSION 0.2.0 
+    VERSION 0.3.0 
     DESCRIPTION "Microservice for media ingestion and waveform processing"
     LANGUAGES CXX)
 
