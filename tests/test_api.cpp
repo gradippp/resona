@@ -15,19 +15,6 @@ struct ServerFixture {
     std::thread server_thread;
 
     ServerFixture() {
-        // Initialize database for testing
-        try {
-            auto& db = services::DatabaseService::get_instance();
-            try {
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            } catch (...) {
-                db.initialize("127.0.0.1", 3307, "root", "root", "");
-                mysql_query(db.get_connection(), "CREATE DATABASE IF NOT EXISTS resona");
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            }
-            db.initialize_schema();
-        } catch (...) {}
-
         routes::setup(app);
         app.loglevel(crow::LogLevel::Warning);
         
@@ -81,7 +68,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto add_res1 = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_awaiting_1.json\"}"}
+            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\"}"}
         );
         REQUIRE(add_res1.status_code == 202);
 
@@ -99,7 +86,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto add_res2 = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch/" + batch_id},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\", \"destination_path\": \"test_awaiting_2.json\"}"}
+            cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\"}"}
         );
         REQUIRE(add_res2.status_code == 202);
 
@@ -134,7 +121,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto add_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch/invalid-batch-id"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"file_id\": \"f1\", \"destination_path\": \"/\"}"}
+            cpr::Body{"{\"file_id\": \"f1\"}"}
         );
         
         REQUIRE(add_res.status_code == 404);

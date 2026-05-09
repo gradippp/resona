@@ -1,6 +1,7 @@
 include(Catch)
 
 add_executable(resona-tests 
+    test_main.cpp
     test_uuid.cpp 
     test_batch_manager.cpp 
     test_api.cpp
@@ -9,7 +10,7 @@ add_executable(resona-tests
 )
 target_link_libraries(resona-tests
     PRIVATE
-    Catch2::Catch2WithMain
+    Catch2::Catch2
     resona-core
 )
 

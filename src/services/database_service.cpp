@@ -41,9 +41,10 @@ void DatabaseService::initialize_schema() {
         "CREATE TABLE IF NOT EXISTS batches ("
         "  id VARCHAR(36) PRIMARY KEY,"
         "  status VARCHAR(20) NOT NULL,"
-        "  options JSON,"
+        "  options JSON NOT NULL,"
+        "  delete_at DATETIME NULL,"
         "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        ")",
+        ") ENGINE=InnoDB;",
         "CREATE TABLE IF NOT EXISTS tasks ("
         "  id VARCHAR(36) PRIMARY KEY,"
         "  batch_id VARCHAR(36) NOT NULL,"

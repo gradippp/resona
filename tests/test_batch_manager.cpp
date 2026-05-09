@@ -7,23 +7,6 @@
 #include <iostream>
 
 TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
-    // Initialize database for testing
-    static bool db_initialized = false;
-    if (!db_initialized) {
-        try {
-            auto& db = services::DatabaseService::get_instance();
-            try {
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            } catch (...) {
-                db.initialize("127.0.0.1", 3307, "root", "root", "");
-                mysql_query(db.get_connection(), "CREATE DATABASE IF NOT EXISTS resona");
-                db.initialize("127.0.0.1", 3307, "root", "root", "resona");
-            }
-            db.initialize_schema();
-            db_initialized = true;
-        } catch (...) {}
-    }
-
     auto& manager = services::BatchManager::get_instance();
 
     SECTION("Create Batch") {
@@ -50,16 +33,13 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
 
         models::AddTaskRequest task;
         task.file_id = "f1";
-        task.destination_path = "d1";
         
         REQUIRE(manager.add_task(batch_id, task));
         
         task.file_id = "f2";
-        task.destination_path = "d2";
         REQUIRE(manager.add_task(batch_id, task));
 
         task.file_id = "f3";
-        task.destination_path = "d3";
         REQUIRE(!manager.add_task(batch_id, task)); // Should fail
     }
 
@@ -78,7 +58,6 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
 
         models::AddTaskRequest task_req;
         task_req.file_id = "http://127.0.0.1:1"; 
-        task_req.destination_path = "test_batch_2.bin";
         manager.add_task(batch_id, task_req);
         
         // Wait for background processing (wait_duration 1s + buffer + download time + retries)
@@ -106,19 +85,16 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         // Dropbox URL should succeed
         models::AddTaskRequest task1;
         task1.file_id = "https://www.dropbox.com/s/123/file.wav?dl=0";
-        task1.destination_path = "test1.wav";
         REQUIRE(manager.add_task(batch_id, task1));
 
         // Google Drive URL should fail
         models::AddTaskRequest task2;
         task2.file_id = "https://drive.google.com/file/d/abc/view";
-        task2.destination_path = "test2.wav";
         REQUIRE(!manager.add_task(batch_id, task2));
 
         // Any URL should fail if not dropbox
         models::AddTaskRequest task3;
         task3.file_id = "https://example.com/file.wav";
-        task3.destination_path = "test3.wav";
         REQUIRE(!manager.add_task(batch_id, task3));
 
         // New batch with multiple allowed
@@ -136,7 +112,6 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         
         models::AddTaskRequest task4;
         task4.file_id = "https://example.com/direct.wav";
-        task4.destination_path = "direct.wav";
         REQUIRE(manager.add_task(batch_id3, task4)); // Direct allowed
 
         req.allowed_services = {"DIRECT", "DROPBOX"};
