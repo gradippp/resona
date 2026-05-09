@@ -24,9 +24,13 @@ pipeline {
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     
                     // Robust version extraction using grep -oP
-                    env.PROJECT_VERSION = sh(script: "grep -oP 'VERSION\\s+\\K[0-9.]+' CMakeLists.txt | head -1", returnStdout: true).trim()
+                    env.PROJECT_VERSION = sh(script: "grep -v 'cmake_minimum_required' CMakeLists.txt | grep -oP 'VERSION\\s+\\K[0-9.]+' | head -1", returnStdout: true).trim()
                     if (!env.PROJECT_VERSION) {
                         env.PROJECT_VERSION = 'latest'
+                    }
+                    
+                    if (env.BRANCH_NAME == 'dev') {
+                        env.PROJECT_VERSION = "${env.PROJECT_VERSION}d"
                     }
 
                     // Define tags (Full path with registry)
