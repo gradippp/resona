@@ -15,6 +15,15 @@ using json = nlohmann::json;
 
 namespace services {
 
+BatchManager::BatchManager() {
+    const char* env_dir = std::getenv("STORAGE_DIRECTORY");
+    storage_dir_ = env_dir ? env_dir : "data";
+    if (!std::filesystem::exists(storage_dir_)) {
+        std::filesystem::create_directories(storage_dir_);
+        CROW_LOG_INFO << "Created storage directory: " << storage_dir_;
+    }
+}
+
 static std::chrono::milliseconds parse_duration_ms(const std::string& duration_str) {
     if (duration_str.empty()) return std::chrono::milliseconds(0);
     try {
@@ -198,9 +207,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     if (query_pos != std::string::npos) url_path = url_path.substr(0, query_pos);
     std::string ext = std::filesystem::path(url_path).extension().string();
 
-    std::filesystem::path base_dir = ".";
-    const char* storage_dir = std::getenv("STORAGE_DIRECTORY");
-    if (storage_dir != nullptr) base_dir = storage_dir;
+    std::filesystem::path base_dir = storage_dir_;
     std::filesystem::path dest_path = base_dir / batch_id / (task_id + ext);
     std::string dest_path_str = dest_path.string();
 
@@ -562,9 +569,7 @@ bool BatchManager::start_batch(const std::string& batch_id) {
                 }
 
                 for (const auto& b_id : to_delete) {
-                    std::filesystem::path base_dir = ".";
-                    const char* storage_dir = std::getenv("STORAGE_DIRECTORY");
-                    if (storage_dir != nullptr) base_dir = storage_dir;
+                    std::filesystem::path base_dir = storage_dir_;
                     try {
                         if (std::filesystem::exists(base_dir / b_id)) std::filesystem::remove_all(base_dir / b_id);
                         std::lock_guard<std::mutex> lock(db_mutex_);

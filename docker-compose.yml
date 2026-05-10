@@ -8,7 +8,7 @@ services:
       DATABASE_URL: mysql://resona_user:resona_password@mariadb:3306/resona
       STORAGE_DIRECTORY: /app/data
     volumes:
-      - ./resona_data:/app/data
+      - ./data:/app/data
     depends_on:
       - mariadb
 

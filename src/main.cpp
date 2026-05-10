@@ -62,6 +62,9 @@ int main() {
     // Setup routes
     routes::setup(app);
 
+    auto storage_dir = services::BatchManager::get_instance().get_storage_directory();
+    CROW_LOG_INFO << "Storage directory: " << storage_dir;
+
     // Register a global 404 handler
     app.errorhandler(404)([](int status, crow::response& res) {
         res = utils::error_response("The requested resource was not found", 404);
