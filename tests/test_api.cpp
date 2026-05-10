@@ -115,6 +115,23 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(ingested_json["id"] == task_id);
         REQUIRE(ingested_json.contains("metadata"));
         // waveform_resolution will be 0 here because it's not a real media file
+
+        // 8. Test /v1/ingested/{task_id}/stream
+        // Full file stream
+        auto stream_res = cpr::Get(cpr::Url{"http://localhost:8081/v1/ingested/" + task_id + "/stream"});
+        REQUIRE(stream_res.status_code == 200);
+        REQUIRE(stream_res.header["Accept-Ranges"] == "bytes");
+        REQUIRE(!stream_res.text.empty());
+
+        // Partial range stream (first 10 bytes)
+        auto range_res = cpr::Get(
+            cpr::Url{"http://localhost:8081/v1/ingested/" + task_id + "/stream"},
+            cpr::Header{{"Range", "bytes=0-9"}}
+        );
+        REQUIRE(range_res.status_code == 206);
+        REQUIRE(range_res.header["Accept-Ranges"] == "bytes");
+        REQUIRE(range_res.header.count("Content-Range") > 0);
+        REQUIRE(range_res.text.length() == 10);
     }
 
     SECTION("Adding a task to a non-existent batch fails") {
