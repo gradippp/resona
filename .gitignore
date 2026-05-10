@@ -34,3 +34,6 @@ out/
 test_api_dl.json
 test_awaiting_*.json
 Testing/
+
+# Data Storage
+data/

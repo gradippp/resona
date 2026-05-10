@@ -5,8 +5,8 @@
 namespace routes {
 
 void setup(crow::SimpleApp& app) {
-    system::setup(app);
     batch::setup(app);
+    system::setup(app);
 }
 
 } // namespace routes

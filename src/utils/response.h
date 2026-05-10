@@ -42,11 +42,17 @@ inline std::string get_default_title(int status) {
 }
 
 inline crow::response json_response(const nlohmann::json& j, int status = 200) {
-    return crow::response(status, j.dump());
+    crow::response res(status);
+    res.set_header("Content-Type", "application/json");
+    res.write(j.dump());
+    return res;
 }
 
 inline crow::response error_response(const ProblemDetails& problem) {
-    return crow::response(problem.status, problem.to_json().dump());
+    crow::response res(problem.status);
+    res.set_header("Content-Type", "application/json");
+    res.write(problem.to_json().dump());
+    return res;
 }
 
 inline crow::response error_response(const std::string& detail, int status = 400, const std::string& title = "") {
@@ -55,6 +61,17 @@ inline crow::response error_response(const std::string& detail, int status = 400
     problem.title = title.empty() ? get_default_title(status) : title;
     problem.detail = detail;
     return error_response(problem);
+}
+
+inline void send_error(crow::response& res, const std::string& detail, int status = 400, const std::string& title = "") {
+    ProblemDetails problem;
+    problem.status = status;
+    problem.title = title.empty() ? get_default_title(status) : title;
+    problem.detail = detail;
+    res.code = status;
+    res.set_header("Content-Type", "application/json");
+    res.write(problem.to_json().dump());
+    res.end();
 }
 
 } // namespace utils

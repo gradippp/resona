@@ -20,10 +20,12 @@ public:
     bool complete_batch(const std::string& batch_id);
     std::optional<models::Batch> get_batch(const std::string& batch_id);
     std::optional<models::Task> get_ingested_task(const std::string& task_id);
+    std::string get_storage_directory() const { return storage_dir_; }
 
 private:
-    BatchManager() = default;
+    BatchManager();
     std::mutex db_mutex_;
+    std::string storage_dir_;
 };
 
 } // namespace services

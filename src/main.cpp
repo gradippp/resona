@@ -2,7 +2,9 @@
 #include "version.h"
 #include "routes/routes.h"
 #include "services/database_service.h"
+#include "services/batch_manager.h"
 #include "utils/logger.h"
+#include "utils/response.h"
 #include <iostream>
 #include <cstdlib>
 #include <regex>
@@ -61,6 +63,14 @@ int main() {
 
     // Setup routes
     routes::setup(app);
+
+    auto storage_dir = services::BatchManager::get_instance().get_storage_directory();
+    CROW_LOG_INFO << "Storage directory: " << storage_dir;
+
+    // Register a global 404 handler
+    CROW_CATCHALL_ROUTE(app)([](const crow::request& req, crow::response& res) {
+        utils::send_error(res, "The requested resource was not found", 404);
+    });
 
     std::cout << "Resona v" << RESONA_VERSION << " listening on port 8080..." << std::endl;
     app.port(8080).multithreaded().run();

@@ -35,7 +35,7 @@ The project uses git submodules for dependencies.
 
 ### Configuration
 The service is configured via environment variables:
-- `STORAGE_DIRECTORY`: (Required) The root directory for media storage. Files are automatically structured as `${STORAGE_DIRECTORY}/${BATCH_ID}/${TASK_ID}.${ext}`.
+- `STORAGE_DIRECTORY`: The root directory for media storage. Defaults to `data` if not set. Files are automatically structured as `${STORAGE_DIRECTORY}/${BATCH_ID}/${TASK_ID}.${ext}`.
 - `PORT`: (Default: 8080) The port the REST API listens on.
 - `DATABASE_URL`: (Required) Database connection URL in the format `mysql://[user[:pass]@]host[:port]/dbname`.
   Example: `mysql://resona_user:resona_password@localhost:3306/resona`
