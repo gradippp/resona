@@ -126,6 +126,9 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         REQUIRE(add_res.status_code == 404);
         auto j = json::parse(add_res.text);
-        REQUIRE(j.contains("error"));
+        REQUIRE(j["title"] == "Not Found");
+        REQUIRE(j["status"] == 404);
+        REQUIRE(j["detail"] == "Batch not found or already started");
+        REQUIRE(j.contains("type"));
     }
 }
