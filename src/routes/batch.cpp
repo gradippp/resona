@@ -87,42 +87,32 @@ void setup(crow::SimpleApp& app) {
     });
 
     // GET /v1/ingested/{task_id}/stream - Stream the ingested file with seeking support
-    CROW_ROUTE(app, "/v1/ingested/<string>/stream").methods(crow::HTTPMethod::GET)([&manager](const crow::request& req, crow::response& res, std::string task_id) {
+    CROW_ROUTE(app, "/v1/ingested/<string>/stream").methods(crow::HTTPMethod::GET)([&manager](const crow::request& req, std::string task_id) {
+        CROW_LOG_INFO << "Streaming request for task: " << task_id;
+        
         auto task = manager.get_ingested_task(task_id);
         if (!task) {
-            auto err = utils::error_response("Ingested task not found", 404);
-            res.code = err.code;
-            res.body = std::move(err.body);
-            for(auto& h : err.headers) res.set_header(h.first, h.second);
-            res.end();
-            return;
+            CROW_LOG_WARNING << "Streaming failed: Task " << task_id << " not found";
+            return utils::error_response("Ingested task not found", 404);
         }
 
         if (task->status != "success") {
-            auto err = utils::error_response("Task has not completed successfully", 400);
-            res.code = err.code;
-            res.body = std::move(err.body);
-            for(auto& h : err.headers) res.set_header(h.first, h.second);
-            res.end();
-            return;
+            CROW_LOG_WARNING << "Streaming failed: Task " << task_id << " status is " << task->status;
+            return utils::error_response("Task has not completed successfully", 400);
         }
 
         std::string path = task->destination_path;
         if (!std::filesystem::exists(path)) {
-            auto err = utils::error_response("File not found on disk", 404);
-            res.code = err.code;
-            res.body = std::move(err.body);
-            for(auto& h : err.headers) res.set_header(h.first, h.second);
-            res.end();
-            return;
+            CROW_LOG_ERROR << "Streaming failed: File not found at " << path;
+            return utils::error_response("File not found on disk", 404);
         }
 
+        crow::response res;
         std::string range_header = req.get_header_value("Range");
         if (range_header.empty()) {
             res.set_static_file_info(path);
             res.add_header("Accept-Ranges", "bytes");
-            res.end();
-            return;
+            return res;
         }
 
         // Simple range parsing: "bytes=start-end"
@@ -142,19 +132,15 @@ void setup(crow::SimpleApp& app) {
                 }
             }
         } catch (...) {
-            auto err = utils::error_response("Invalid Range header", 400);
-            res.code = err.code;
-            res.body = std::move(err.body);
-            for(auto& h : err.headers) res.set_header(h.first, h.second);
-            res.end();
-            return;
+            CROW_LOG_WARNING << "Streaming failed: Invalid Range header: " << range_header;
+            return utils::error_response("Invalid Range header", 400);
         }
 
         if (start >= file_size || end >= file_size || start > end) {
+            CROW_LOG_WARNING << "Streaming failed: Range not satisfiable: " << range_header << " (size: " << file_size << ")";
             res.code = 416;
             res.add_header("Content-Range", "bytes */" + std::to_string(file_size));
-            res.end();
-            return;
+            return res;
         }
 
         size_t length = end - start + 1;
@@ -175,11 +161,12 @@ void setup(crow::SimpleApp& app) {
             res.add_header("Content-Type", crow::response::get_mime_type(path.substr(last_dot + 1)));
         }
 
-        res.end();
+        return res;
     });
 
     // GET /v1/ingested/{task_id} - Get specific ingested file metadata and waveform
     CROW_ROUTE(app, "/v1/ingested/<string>").methods(crow::HTTPMethod::GET)([&manager](std::string task_id) {
+        CROW_LOG_INFO << "Metadata request for task: " << task_id;
         auto task = manager.get_ingested_task(task_id);
         if (task) {
             return utils::json_response(*task);
