@@ -68,9 +68,8 @@ int main() {
     CROW_LOG_INFO << "Storage directory: " << storage_dir;
 
     // Register a global 404 handler
-    CROW_CATCHALL_ROUTE(app)([](crow::response& res) {
-        res = utils::error_response("The requested resource was not found", 404);
-        res.end();
+    CROW_CATCHALL_ROUTE(app)([](const crow::request& req, crow::response& res) {
+        utils::send_error(res, "The requested resource was not found", 404);
     });
 
     std::cout << "Resona v" << RESONA_VERSION << " listening on port 8080..." << std::endl;

@@ -110,11 +110,10 @@ namespace batch {
             crow::response res;
             std::string range_header = req.get_header_value("Range");
             if (range_header.empty()) {
-                res.set_static_file_info(path);
+                res.set_static_file_info_unsafe(path);
                 res.add_header("Accept-Ranges", "bytes");
                 return res;
-            }
-
+                }
             // Simple range parsing: "bytes=start-end"
             size_t file_size = std::filesystem::file_size(path);
             size_t start = 0, end = file_size - 1;
