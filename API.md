@@ -7,11 +7,14 @@ This document describes the REST API endpoints available in the Resona media ing
 ## 1. Global Standards
 
 ### 1.1. Error Response Schema
-All non-200 series responses follow this standard structure:
+All non-200 series responses follow the **RFC 7807 (Problem Details for HTTP APIs)** standard:
 
 ```json
 {
-  "error": "Short description of the error"
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Short description of the error"
 }
 ```
 
@@ -45,7 +48,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.2.0"
+  "version": "0.4.0"
 }
 ```
 
@@ -106,7 +109,23 @@ Queue a specific media ingestion task.
 }
 ```
 **Error (400 Bad Request):**
-`{"error": "Batch <uuid> has reached max size of 50"}` or `{"error": "Service type 'DIRECT' not allowed for URL: ..."}`
+```json
+{
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Batch <uuid> has reached max size of 50"
+}
+```
+or 
+```json
+{
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Service type 'DIRECT' not allowed for URL: ..."
+}
+```
 
 ### 4.3. Start a Batch
 Transitions a `pending` batch to the `awaiting` state to begin the background monitor loop.
