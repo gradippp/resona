@@ -3,6 +3,8 @@
 #include "../services/batch_manager.h"
 #include "../utils/response.h"
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 
 namespace routes {
 namespace batch {
@@ -92,6 +94,86 @@ void setup(crow::SimpleApp& app) {
         } else {
             return utils::error_response("Ingested task not found", 404);
         }
+    });
+
+    // GET /v1/ingested/{task_id}/stream - Stream the ingested file with seeking support
+    CROW_ROUTE(app, "/v1/ingested/<string>/stream").methods(crow::HTTPMethod::GET)([&manager](const crow::request& req, crow::response& res, std::string task_id) {
+        auto task = manager.get_ingested_task(task_id);
+        if (!task) {
+            res = utils::error_response("Ingested task not found", 404);
+            res.end();
+            return;
+        }
+
+        if (task->status != "success") {
+            res = utils::error_response("Task has not completed successfully", 400);
+            res.end();
+            return;
+        }
+
+        std::string path = task->destination_path;
+        if (!std::filesystem::exists(path)) {
+            res = utils::error_response("File not found on disk", 404);
+            res.end();
+            return;
+        }
+
+        std::string range_header = req.get_header_value("Range");
+        if (range_header.empty()) {
+            res.set_static_file_info(path);
+            res.add_header("Accept-Ranges", "bytes");
+            res.end();
+            return;
+        }
+
+        // Simple range parsing: "bytes=start-end"
+        size_t file_size = std::filesystem::file_size(path);
+        size_t start = 0, end = file_size - 1;
+
+        try {
+            std::string prefix = "bytes=";
+            if (range_header.substr(0, prefix.size()) == prefix) {
+                std::string range = range_header.substr(prefix.size());
+                size_t dash_pos = range.find('-');
+                if (dash_pos != std::string::npos) {
+                    std::string s_start = range.substr(0, dash_pos);
+                    std::string s_end = range.substr(dash_pos + 1);
+                    if (!s_start.empty()) start = std::stoull(s_start);
+                    if (!s_end.empty()) end = std::stoull(s_end);
+                }
+            }
+        } catch (...) {
+            res = utils::error_response("Invalid Range header", 400);
+            res.end();
+            return;
+        }
+
+        if (start >= file_size || end >= file_size || start > end) {
+            res.code = 416;
+            res.add_header("Content-Range", "bytes */" + std::to_string(file_size));
+            res.end();
+            return;
+        }
+
+        size_t length = end - start + 1;
+        std::ifstream file(path, std::ios::binary);
+        file.seekg(start);
+
+        std::string buffer(length, '\0');
+        file.read(&buffer[0], length);
+
+        res.code = 206;
+        res.body = std::move(buffer);
+        res.add_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(file_size));
+        res.add_header("Content-Length", std::to_string(length));
+        res.add_header("Accept-Ranges", "bytes");
+        
+        std::size_t last_dot = path.find_last_of('.');
+        if (last_dot != std::string::npos) {
+            res.add_header("Content-Type", crow::response::get_mime_type(path.substr(last_dot + 1)));
+        }
+
+        res.end();
     });
 }
 

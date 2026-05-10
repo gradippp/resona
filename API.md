@@ -48,7 +48,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.4.0"
+  "version": "0.5.0"
 }
 ```
 
@@ -193,6 +193,28 @@ Direct lookup of a successfully ingested file by its unique Task UUID.
 
 **Response (200 OK):**
 Same object schema as an individual item in the `tasks` array from section 4.4.
+
+### 5.2. Stream Ingested File
+Stream a successfully ingested media file. This endpoint is optimized for audio streaming and supports seeking via standard HTTP Range requests, making it compatible with HTML5 `<audio>` and `<video>` tags.
+
+**Request:**
+`GET /v1/ingested/{task_id}/stream`
+
+**Headers:**
+- `Range`: (Optional) Standard HTTP range header (e.g., `bytes=0-1024` or `bytes=2048-`).
+
+**Response:**
+- `200 OK`: Returns the full file content (standard download/stream).
+- `206 Partial Content`: Returns the requested byte range. Essential for seeking in audio/video players.
+- `400 Bad Request`: If the task hasn't finished downloading yet.
+- `404 Not Found`: If the Task UUID doesn't exist or the file has been deleted.
+- `416 Range Not Satisfiable`: If the requested byte range is outside the file's actual size.
+
+**Headers in Response:**
+- `Accept-Ranges: bytes`: Informs the client that seeking is supported.
+- `Content-Range`: (On 206) Specifies the range and total size (e.g., `bytes 0-1024/5000000`).
+- `Content-Type`: Automatically set based on the file extension (e.g., `audio/mpeg`, `audio/wav`).
+- `Content-Length`: The size of the content being returned in the current response.
 
 ---
 
