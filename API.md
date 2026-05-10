@@ -48,7 +48,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.4.0"
+  "version": "0.5.0"
 }
 ```
 
@@ -193,6 +193,25 @@ Direct lookup of a successfully ingested file by its unique Task UUID.
 
 **Response (200 OK):**
 Same object schema as an individual item in the `tasks` array from section 4.4.
+
+### 5.2. Stream Ingested File
+Stream a successfully ingested media file with support for HTTP Range requests (seeking).
+
+**Request:**
+`GET /v1/ingested/{task_id}/stream`
+
+**Headers:**
+- `Range`: (Optional) Standard HTTP range header (e.g., `bytes=0-1024`).
+
+**Response:**
+- `200 OK`: Full file content (if no Range header is provided).
+- `206 Partial Content`: Partial file content (if a valid Range header is provided).
+- `416 Range Not Satisfiable`: If the requested range is out of bounds.
+
+**Headers in Response:**
+- `Accept-Ranges: bytes`
+- `Content-Range`: (On 206) e.g., `bytes 0-1024/2048`
+- `Content-Type`: Automatically detected based on file extension.
 
 ---
 
