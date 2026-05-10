@@ -86,34 +86,33 @@ void setup(crow::SimpleApp& app) {
         }
     });
 
-    // GET /v1/ingested/{task_id} - Get specific ingested file metadata and waveform
-    CROW_ROUTE(app, "/v1/ingested/<string>").methods(crow::HTTPMethod::GET)([&manager](std::string task_id) {
-        auto task = manager.get_ingested_task(task_id);
-        if (task) {
-            return utils::json_response(*task);
-        } else {
-            return utils::error_response("Ingested task not found", 404);
-        }
-    });
-
     // GET /v1/ingested/{task_id}/stream - Stream the ingested file with seeking support
     CROW_ROUTE(app, "/v1/ingested/<string>/stream").methods(crow::HTTPMethod::GET)([&manager](const crow::request& req, crow::response& res, std::string task_id) {
         auto task = manager.get_ingested_task(task_id);
         if (!task) {
-            res = utils::error_response("Ingested task not found", 404);
+            auto err = utils::error_response("Ingested task not found", 404);
+            res.code = err.code;
+            res.body = std::move(err.body);
+            for(auto& h : err.headers) res.set_header(h.first, h.second);
             res.end();
             return;
         }
 
         if (task->status != "success") {
-            res = utils::error_response("Task has not completed successfully", 400);
+            auto err = utils::error_response("Task has not completed successfully", 400);
+            res.code = err.code;
+            res.body = std::move(err.body);
+            for(auto& h : err.headers) res.set_header(h.first, h.second);
             res.end();
             return;
         }
 
         std::string path = task->destination_path;
         if (!std::filesystem::exists(path)) {
-            res = utils::error_response("File not found on disk", 404);
+            auto err = utils::error_response("File not found on disk", 404);
+            res.code = err.code;
+            res.body = std::move(err.body);
+            for(auto& h : err.headers) res.set_header(h.first, h.second);
             res.end();
             return;
         }
@@ -143,7 +142,10 @@ void setup(crow::SimpleApp& app) {
                 }
             }
         } catch (...) {
-            res = utils::error_response("Invalid Range header", 400);
+            auto err = utils::error_response("Invalid Range header", 400);
+            res.code = err.code;
+            res.body = std::move(err.body);
+            for(auto& h : err.headers) res.set_header(h.first, h.second);
             res.end();
             return;
         }
@@ -175,6 +177,17 @@ void setup(crow::SimpleApp& app) {
 
         res.end();
     });
+
+    // GET /v1/ingested/{task_id} - Get specific ingested file metadata and waveform
+    CROW_ROUTE(app, "/v1/ingested/<string>").methods(crow::HTTPMethod::GET)([&manager](std::string task_id) {
+        auto task = manager.get_ingested_task(task_id);
+        if (task) {
+            return utils::json_response(*task);
+        } else {
+            return utils::error_response("Ingested task not found", 404);
+        }
+    });
+
 }
 
 } // namespace batch
