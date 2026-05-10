@@ -2,7 +2,9 @@
 #include "version.h"
 #include "routes/routes.h"
 #include "services/database_service.h"
+#include "services/batch_manager.h"
 #include "utils/logger.h"
+#include "utils/response.h"
 #include <iostream>
 #include <cstdlib>
 #include <regex>
@@ -66,7 +68,7 @@ int main() {
     CROW_LOG_INFO << "Storage directory: " << storage_dir;
 
     // Register a global 404 handler
-    app.errorhandler(404)([](int status, crow::response& res) {
+    CROW_CATCHALL_ROUTE(app)([](crow::response& res) {
         res = utils::error_response("The requested resource was not found", 404);
         res.end();
     });
