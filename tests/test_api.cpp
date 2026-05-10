@@ -148,4 +148,24 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(j["detail"] == "Batch not found or already started");
         REQUIRE(j.contains("type"));
     }
+
+    SECTION("404 Inconsistency Check (Reproduction)") {
+        // Reported UUID that gives raw 404
+        std::string reported_uuid = "133d1756-1873-4d0d-bf78-d3e521d0be63";
+        auto res1 = cpr::Get(cpr::Url{"http://localhost:8081/v1/ingested/" + reported_uuid + "/stream"});
+        
+        // This should now return a JSON 404
+        REQUIRE(res1.status_code == 404);
+        CHECK(res1.header["Content-Type"].find("application/json") != std::string::npos);
+        auto j1 = json::parse(res1.text);
+        REQUIRE(j1["detail"] == "Ingested task not found");
+        
+        // Very long ID that gives JSON 404
+        std::string long_id = "133d1756-1873-4d0d-bf78-d3e521d0be6adagadg3";
+        auto res2 = cpr::Get(cpr::Url{"http://localhost:8081/v1/ingested/" + long_id + "/stream"});
+        
+        REQUIRE(res2.status_code == 404);
+        auto j2 = json::parse(res2.text);
+        REQUIRE(j2["detail"] == "Ingested task not found");
+    }
 }

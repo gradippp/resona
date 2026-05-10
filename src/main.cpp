@@ -62,6 +62,12 @@ int main() {
     // Setup routes
     routes::setup(app);
 
+    // Register a global 404 handler
+    app.errorhandler(404)([](int status, crow::response& res) {
+        res = utils::error_response("The requested resource was not found", 404);
+        res.end();
+    });
+
     std::cout << "Resona v" << RESONA_VERSION << " listening on port 8080..." << std::endl;
     app.port(8080).multithreaded().run();
 }
