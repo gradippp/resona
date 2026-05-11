@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 project(resona 
-    VERSION 0.5.7 
+    VERSION 0.5.8 
     DESCRIPTION "Microservice for media ingestion and waveform processing"
     LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(WIN32)
+    add_definitions(-D_WIN32_WINNT=0x0A00)
+endif()
 
 # Version header generation
 configure_file(
