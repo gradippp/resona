@@ -57,6 +57,11 @@ int main() {
 
     if (!db_ready) {
         CROW_LOG_ERROR << "Failed to initialize database after " << max_retries << " attempts. Service will continue, but database-dependent features will fail.";
+    } else {
+        // Recover tasks that were stuck in intermediate states (e.g. crash during download)
+        services::BatchManager::get_instance().recover_stuck_tasks();
+        // Start background monitors to process existing 'awaiting' batches
+        services::BatchManager::get_instance().start_monitors();
     }
 
     crow::SimpleApp app;

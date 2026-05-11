@@ -275,6 +275,26 @@ bool BatchManager::start_batch(const std::string& batch_id) {
 
     CROW_LOG_INFO << "Started batch (moved to awaiting): " << batch_id;
     
+    start_monitors();
+    
+    return true;
+}
+
+void BatchManager::recover_stuck_tasks() {
+    MYSQL* conn = DatabaseService::get_instance().get_connection();
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    const char* query = "UPDATE tasks SET status = 'pending' WHERE status IN ('processing', 'downloading')";
+    if (mysql_query(conn, query)) {
+        CROW_LOG_ERROR << "Failed to recover stuck tasks: " << mysql_error(conn);
+    } else {
+        unsigned long long affected = mysql_affected_rows(conn);
+        if (affected > 0) {
+            CROW_LOG_INFO << "Recovered " << affected << " stuck tasks.";
+        }
+    }
+}
+
+void BatchManager::start_monitors() {
     static std::once_flag monitor_started;
     std::call_once(monitor_started, [this]() {
         // Task Processing Monitor
@@ -588,6 +608,7 @@ bool BatchManager::start_batch(const std::string& batch_id) {
             }
         }).detach();
     });
+}
     
     return true;
 }

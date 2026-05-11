@@ -76,6 +76,35 @@ TEST_CASE("BatchManager functionality", "[services][batch_manager]") {
         REQUIRE(batch->status == "completed");
     }
 
+    SECTION("Task Recovery") {
+        models::CreateBatchRequest req;
+        req.delete_after = "24H";
+        std::string batch_id = manager.create_batch(req);
+
+        models::AddTaskRequest task_req;
+        task_req.file_id = "http://recovery-test";
+        manager.add_task(batch_id, task_req);
+
+        auto batch = manager.get_batch(batch_id);
+        std::string task_id = batch->tasks[0].id;
+
+        // Manually simulate a stuck task in DB
+        MYSQL* conn = services::DatabaseService::get_instance().get_connection();
+        std::string query = "UPDATE tasks SET status = 'downloading' WHERE id = '" + task_id + "'";
+        mysql_query(conn, query.c_str());
+
+        // Verify it's stuck
+        batch = manager.get_batch(batch_id);
+        REQUIRE(batch->tasks[0].status == "downloading");
+
+        // Run recovery
+        manager.recover_stuck_tasks();
+
+        // Verify it's reset to pending
+        batch = manager.get_batch(batch_id);
+        REQUIRE(batch->tasks[0].status == "pending");
+    }
+
     SECTION("Allowed Services Enforcement") {
         models::CreateBatchRequest req;
         req.allowed_services = {"DROPBOX"};
