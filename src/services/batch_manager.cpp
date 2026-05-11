@@ -609,9 +609,6 @@ void BatchManager::start_monitors() {
         }).detach();
     });
 }
-    
-    return true;
-}
 
 bool BatchManager::complete_batch(const std::string& batch_id) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
