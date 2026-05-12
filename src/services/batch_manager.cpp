@@ -4,6 +4,7 @@
 #include "database_service.h"
 #include "../utils/uuid.h"
 #include "../utils/size_parser.h"
+#include "../utils/base64.h"
 #include "crow/logging.h"
 #include <thread>
 #include <chrono>
@@ -543,14 +544,18 @@ void BatchManager::start_monitors() {
                                         }
 
                                         std::string wave_str = json(m_res.waveform_data).dump();
-                                        const char* wave_query = "INSERT INTO waveforms (task_id, waveform_data, resolution) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE waveform_data=VALUES(waveform_data), resolution=VALUES(resolution)";
+                                        const char* wave_query = "INSERT INTO waveforms (task_id, waveform_data, waveform_peaks_binary, resolution) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE waveform_data=VALUES(waveform_data), waveform_peaks_binary=VALUES(waveform_peaks_binary), resolution=VALUES(resolution)";
                                         MYSQL_STMT* w_stmt = mysql_stmt_init(t_conn);
                                         if (w_stmt) {
                                             if (!mysql_stmt_prepare(w_stmt, wave_query, strlen(wave_query))) {
-                                                MYSQL_BIND bind[3]; memset(bind, 0, sizeof(bind));
+                                                MYSQL_BIND bind[4]; memset(bind, 0, sizeof(bind));
                                                 bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)t.id.c_str(); bind[0].buffer_length = t.id.length();
                                                 bind[1].buffer_type = MYSQL_TYPE_BLOB; bind[1].buffer = (char*)wave_str.c_str(); bind[1].buffer_length = wave_str.length();
-                                                bind[2].buffer_type = MYSQL_TYPE_LONG; bind[2].buffer = &res_val;
+                                                
+                                                size_t binary_size = m_res.waveform_peaks.size() * sizeof(services::WaveformPointInt16);
+                                                bind[2].buffer_type = MYSQL_TYPE_BLOB; bind[2].buffer = (char*)m_res.waveform_peaks.data(); bind[2].buffer_length = binary_size;
+                                                
+                                                bind[3].buffer_type = MYSQL_TYPE_LONG; bind[3].buffer = &res_val;
                                                 mysql_stmt_bind_param(w_stmt, bind); mysql_stmt_execute(w_stmt);
                                             }
                                             mysql_stmt_close(w_stmt);
@@ -711,13 +716,13 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
         }
         mysql_stmt_close(stmt);
 
-        const char* task_query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.batch_id = ?";
+        const char* task_query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.batch_id = ?";
         stmt = mysql_stmt_init(conn);
         if (stmt && !mysql_stmt_prepare(stmt, task_query, strlen(task_query))) {
             mysql_stmt_bind_param(stmt, bind);
             if (!mysql_stmt_execute(stmt) && !mysql_stmt_store_result(stmt)) {
-                MYSQL_BIND res_bind_tasks[10]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
-                char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char t_s_buf[21]; unsigned long t_s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; int res_val = 0; bool res_null = false;
+                MYSQL_BIND res_bind_tasks[11]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
+                char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char t_s_buf[21]; unsigned long t_s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
                 res_bind_tasks[0].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[0].buffer = id_buf; res_bind_tasks[0].buffer_length = sizeof(id_buf); res_bind_tasks[0].length = &id_len;
                 res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = f_id_buf.data(); res_bind_tasks[1].buffer_length = f_id_buf.size(); res_bind_tasks[1].length = &f_id_len;
                 res_bind_tasks[2].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[2].buffer = dest_buf.data(); res_bind_tasks[2].buffer_length = dest_buf.size(); res_bind_tasks[2].length = &dest_len;
@@ -727,12 +732,14 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
                 res_bind_tasks[6].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[6].buffer = format_buf; res_bind_tasks[6].buffer_length = sizeof(format_buf); res_bind_tasks[6].length = &format_len; res_bind_tasks[6].is_null = (char*)&format_null;
                 res_bind_tasks[7].buffer_type = MYSQL_TYPE_FLOAT; res_bind_tasks[7].buffer = &dur; res_bind_tasks[7].is_null = (char*)&dur_null;
                 res_bind_tasks[8].buffer_type = MYSQL_TYPE_BLOB; res_bind_tasks[8].buffer = w_buf.data(); res_bind_tasks[8].buffer_length = w_buf.size(); res_bind_tasks[8].length = &w_len; res_bind_tasks[8].is_null = (char*)&w_null;
-                res_bind_tasks[9].buffer_type = MYSQL_TYPE_LONG; res_bind_tasks[9].buffer = &res_val; res_bind_tasks[9].is_null = (char*)&res_null;
+                res_bind_tasks[9].buffer_type = MYSQL_TYPE_BLOB; res_bind_tasks[9].buffer = w_peaks_buf.data(); res_bind_tasks[9].buffer_length = w_peaks_buf.size(); res_bind_tasks[9].length = &w_peaks_len; res_bind_tasks[9].is_null = (char*)&w_peaks_null;
+                res_bind_tasks[10].buffer_type = MYSQL_TYPE_LONG; res_bind_tasks[10].buffer = &res_val; res_bind_tasks[10].is_null = (char*)&res_null;
                 mysql_stmt_bind_result(stmt, res_bind_tasks);
                 while (!mysql_stmt_fetch(stmt)) {
                     models::Task t; t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(t_s_buf, t_s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
                     if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
                     if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
+                    if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); }
                     b.tasks.push_back(t);
                 }
             }
@@ -747,7 +754,7 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
     models::Task t;
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        const char* query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
+        const char* query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
         MYSQL_STMT* stmt = mysql_stmt_init(conn);
         if (!stmt) {
             CROW_LOG_ERROR << "mysql_stmt_init() failed in get_ingested_task";
@@ -774,8 +781,8 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
             return std::nullopt;
         }
 
-        MYSQL_BIND res_bind[10]; memset(res_bind, 0, sizeof(res_bind));
-        char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; int res_val = 0; bool res_null = false;
+        MYSQL_BIND res_bind[11]; memset(res_bind, 0, sizeof(res_bind));
+        char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
         res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = dest_buf.data(); res_bind[2].buffer_length = dest_buf.size(); res_bind[2].length = &dest_len;
@@ -785,7 +792,8 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
         res_bind[6].buffer_type = MYSQL_TYPE_STRING; res_bind[6].buffer = format_buf; res_bind[6].buffer_length = sizeof(format_buf); res_bind[6].length = &format_len; res_bind[6].is_null = (char*)&format_null;
         res_bind[7].buffer_type = MYSQL_TYPE_FLOAT; res_bind[7].buffer = &dur; res_bind[7].is_null = (char*)&dur_null;
         res_bind[8].buffer_type = MYSQL_TYPE_BLOB; res_bind[8].buffer = w_buf.data(); res_bind[8].buffer_length = w_buf.size(); res_bind[8].length = &w_len; res_bind[8].is_null = (char*)&w_null;
-        res_bind[9].buffer_type = MYSQL_TYPE_LONG; res_bind[9].buffer = &res_val; res_bind[9].is_null = (char*)&res_null;
+        res_bind[9].buffer_type = MYSQL_TYPE_BLOB; res_bind[9].buffer = w_peaks_buf.data(); res_bind[9].buffer_length = w_peaks_buf.size(); res_bind[9].length = &w_peaks_len; res_bind[9].is_null = (char*)&w_peaks_null;
+        res_bind[10].buffer_type = MYSQL_TYPE_LONG; res_bind[10].buffer = &res_val; res_bind[10].is_null = (char*)&res_null;
         mysql_stmt_bind_result(stmt, res_bind);
         if (mysql_stmt_fetch(stmt)) {
             CROW_LOG_ERROR << "Fetch failed in get_ingested_task: " << mysql_stmt_error(stmt);
@@ -796,6 +804,7 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
         t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
         if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
         if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
+        if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); }
         mysql_stmt_close(stmt);
     }
     return t;

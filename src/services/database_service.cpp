@@ -65,6 +65,7 @@ void DatabaseService::initialize_schema() {
         "CREATE TABLE IF NOT EXISTS waveforms ("
         "  task_id VARCHAR(36) PRIMARY KEY,"
         "  waveform_data LONGBLOB,"
+        "  waveform_peaks_binary LONGBLOB,"
         "  resolution INT,"
         "  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE"
         ")"
@@ -72,9 +73,15 @@ void DatabaseService::initialize_schema() {
 
     for (const char* query : schema_queries) {
         if (mysql_query(conn_, query)) {
-            throw std::runtime_error("Failed to execute schema query: " + std::string(mysql_error(conn_)));
+            // Check if error is because column already exists (only for ALTER if we were using it)
+            // But here we are using CREATE TABLE IF NOT EXISTS.
+            // For existing tables, we should run an ALTER.
+            CROW_LOG_ERROR << "Failed to execute schema query: " << mysql_error(conn_);
         }
     }
+
+    // Idempotent column addition for existing databases
+    mysql_query(conn_, "ALTER TABLE waveforms ADD COLUMN waveform_peaks_binary LONGBLOB");
 
     CROW_LOG_INFO << "Database schema initialized successfully.";
 }

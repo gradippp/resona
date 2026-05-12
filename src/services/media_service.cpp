@@ -27,85 +27,145 @@ MediaResult MediaService::extract_waveform(const std::string& filepath, int reso
     std::string ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-    float* pSampleData = nullptr;
-    drwav_uint64 totalSampleCount = 0;
     unsigned int channels = 0;
     unsigned int sampleRate = 0;
+    drwav_uint64 totalFrameCount = 0;
+
+    drwav wav;
+    drmp3 mp3;
+    drflac* pFlac = nullptr;
+    bool opened = false;
 
     if (ext == ".wav") {
-        res.format = "WAV";
-        pSampleData = drwav_open_file_and_read_pcm_frames_f32(filepath.c_str(), &channels, &sampleRate, &totalSampleCount, NULL);
+        if (drwav_init_file(&wav, filepath.c_str(), NULL)) {
+            channels = wav.channels;
+            sampleRate = wav.sampleRate;
+            totalFrameCount = wav.totalPCMFrameCount;
+            res.format = "WAV";
+            opened = true;
+        }
     } else if (ext == ".mp3") {
-        res.format = "MP3";
-        drmp3_config config;
-        pSampleData = drmp3_open_file_and_read_pcm_frames_f32(filepath.c_str(), &config, &totalSampleCount, NULL);
-        channels = config.channels;
-        sampleRate = config.sampleRate;
+        if (drmp3_init_file(&mp3, filepath.c_str(), NULL)) {
+            channels = mp3.channels;
+            sampleRate = mp3.sampleRate;
+            totalFrameCount = drmp3_get_pcm_frame_count(&mp3);
+            res.format = "MP3";
+            opened = true;
+        }
     } else if (ext == ".flac") {
-        res.format = "FLAC";
-        pSampleData = drflac_open_file_and_read_pcm_frames_f32(filepath.c_str(), &channels, &sampleRate, &totalSampleCount, NULL);
+        pFlac = drflac_open_file(filepath.c_str(), NULL);
+        if (pFlac) {
+            channels = pFlac->channels;
+            sampleRate = pFlac->sampleRate;
+            totalFrameCount = pFlac->totalPCMFrameCount;
+            res.format = "FLAC";
+            opened = true;
+        }
     } else {
         res.error_message = "Unsupported file format: " + ext;
         return res;
     }
 
-    if (!pSampleData) {
-        res.error_message = "Failed to decode audio data";
+    if (!opened) {
+        res.error_message = "Failed to open audio file";
         return res;
     }
 
-    res.duration_seconds = (float)totalSampleCount / (float)sampleRate;
-    res.waveform_data.resize(resolution, 0.0f);
+    if (totalFrameCount == 0) {
+        // For some files (like some MP3s), frame count might not be in the header.
+        // In a real production system, we might need a pre-scan, but for now we fail if unknown.
+        res.error_message = "Unknown or zero frame count";
+        if (ext == ".wav") drwav_uninit(&wav);
+        else if (ext == ".mp3") drmp3_uninit(&mp3);
+        else if (ext == ".flac") drflac_close(pFlac);
+        return res;
+    }
 
-    if (totalSampleCount > 0) {
-        // Calculate peaks for each window using a Peak/RMS blend
-        double samplesPerWindow = (double)totalSampleCount / (double)resolution;
-        float globalMax = 0.0f;
+    res.duration_seconds = (float)totalFrameCount / (float)sampleRate;
+    
+    const size_t CHUNK_SIZE = 8192;
+    std::vector<float> chunkBuffer(CHUNK_SIZE * channels);
+    
+    struct FloatPeak { float min; float max; };
+    std::vector<FloatPeak> tempPeaks(resolution, {0.0f, 0.0f});
+    
+    double samplesPerWindow = (double)totalFrameCount / (double)resolution;
+    float currentMin = 0.0f;
+    float currentMax = 0.0f;
+    double samplesInCurrentWindow = 0.0;
+    int currentWindowIndex = 0;
+    float globalMax = 0.0f;
+    const float gamma = 0.5f;
+
+    auto apply_gamma = [&](float x) {
+        if (x == 0.0f) return 0.0f;
+        return (x > 0.0f ? 1.0f : -1.0f) * std::pow(std::abs(x), gamma);
+    };
+
+    size_t framesRead = 0;
+    bool processing = true;
+    while (processing) {
+        if (ext == ".wav") framesRead = drwav_read_pcm_frames_f32(&wav, CHUNK_SIZE, chunkBuffer.data());
+        else if (ext == ".mp3") framesRead = drmp3_read_pcm_frames_f32(&mp3, CHUNK_SIZE, chunkBuffer.data());
+        else if (ext == ".flac") framesRead = drflac_read_pcm_frames_f32(pFlac, CHUNK_SIZE, chunkBuffer.data());
         
-        for (int i = 0; i < resolution; ++i) {
-            size_t startFrame = (size_t)(i * samplesPerWindow);
-            size_t endFrame = (size_t)((i + 1) * samplesPerWindow);
-            if (endFrame > totalSampleCount) endFrame = (size_t)totalSampleCount;
+        if (framesRead == 0) break;
 
-            float maxAmp = 0.0f;
-            float sumSq = 0.0f;
-            int windowSampleCount = 0;
-
-            for (size_t j = startFrame; j < endFrame; ++j) {
-                for (unsigned int c = 0; c < channels; ++c) {
-                    size_t index = j * channels + c;
-                    if (index >= totalSampleCount * channels) break;
-                    
-                    float val = std::abs(pSampleData[index]);
-                    if (val > maxAmp) maxAmp = val;
-                    sumSq += val * val;
-                    windowSampleCount++;
-                }
+        for (size_t f = 0; f < framesRead; ++f) {
+            float frameMin = 1.0f;
+            float frameMax = -1.0f;
+            for (unsigned int c = 0; c < channels; ++c) {
+                float val = chunkBuffer[f * channels + c];
+                if (val < frameMin) frameMin = val;
+                if (val > frameMax) frameMax = val;
             }
-            
-            float rms = (windowSampleCount > 0) ? std::sqrt(sumSq / windowSampleCount) : 0.0f;
-            
-            // Blend Peak (50%) and RMS (50%) for organic visual detail
-            float blended = (maxAmp * 0.5f) + (rms * 0.5f);
-            res.waveform_data[i] = blended;
-            if (blended > globalMax) globalMax = blended;
-        }
 
-        // Global Normalization: Ensure the loudest part is 1.0
-        if (globalMax > 0.0f) {
-            for (float& p : res.waveform_data) {
-                p /= globalMax;
+            if (frameMin < currentMin) currentMin = frameMin;
+            if (frameMax > currentMax) currentMax = frameMax;
+            
+            samplesInCurrentWindow += 1.0;
+
+            if (samplesInCurrentWindow >= samplesPerWindow && currentWindowIndex < resolution) {
+                float sMin = apply_gamma(currentMin);
+                float sMax = apply_gamma(currentMax);
+
+                tempPeaks[currentWindowIndex] = {sMin, sMax};
+                
+                float absMax = std::max(std::abs(sMin), std::abs(sMax));
+                if (absMax > globalMax) globalMax = absMax;
+
+                currentMin = 0.0f;
+                currentMax = 0.0f;
+                samplesInCurrentWindow -= samplesPerWindow;
+                currentWindowIndex++;
             }
         }
     }
 
-    // Free the decoded data
-    if (ext == ".wav") drwav_free(pSampleData, NULL);
-    else if (ext == ".mp3") drmp3_free(pSampleData, NULL);
-    else if (ext == ".flac") drflac_free(pSampleData, NULL);
+    // Cleanup decoders
+    if (ext == ".wav") drwav_uninit(&wav);
+    else if (ext == ".mp3") drmp3_uninit(&mp3);
+    else if (ext == ".flac") drflac_close(pFlac);
+
+    // Final normalization, legacy population, and quantization
+    res.waveform_data.resize(resolution, 0.0f);
+    res.waveform_peaks.resize(resolution);
+    
+    if (globalMax > 0.0f) {
+        for (int i = 0; i < resolution; ++i) {
+            float nMin = tempPeaks[i].min / globalMax;
+            float nMax = tempPeaks[i].max / globalMax;
+            
+            res.waveform_peaks[i].minPeak = (int16_t)(nMin * 32767.0f);
+            res.waveform_peaks[i].maxPeak = (int16_t)(nMax * 32767.0f);
+            
+            // Legacy: store scaled positive max peak [0, 1]
+            res.waveform_data[i] = std::max(0.0f, nMax);
+        }
+    }
 
     res.success = true;
-    CROW_LOG_INFO << "Extracted waveform for " << filepath << " (" << res.format << ", " << res.duration_seconds << "s, " << resolution << " peaks)";
+    CROW_LOG_INFO << "Extracted streaming waveform for " << filepath << " (" << res.format << ", " << res.duration_seconds << "s, " << resolution << " peaks)";
     
     return res;
 }

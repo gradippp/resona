@@ -7,7 +7,8 @@ A focused microservice designed for media ingestion and waveform processing. It 
 - **Asynchronous Execution**: Ingestion and processing happen in background threads, keeping the API responsive.
 - **Auto-Cleanup**: Automatically delete processed source files after a specified duration.
 - **Cloud Support**: Supports Dropbox and Google Drive.
-- **Waveform Extraction**: Extraction of audio waveform data for visualization and analysis.
+- **Professional Waveforms**: Constant-memory, streaming extraction of symmetric min/max peak-envelopes. Optimized for transient-rich audio with perceptual gamma scaling.
+- **Low-Latency Streaming**: Optimized media delivery with support for HTTP Range seeking.
 
 ## Setup & Installation
 
