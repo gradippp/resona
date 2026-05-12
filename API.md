@@ -30,6 +30,12 @@ Batches transition through several states: `pending` $\rightarrow$ `awaiting` $\
 - `completed`: The batch is finalized, downloads are finished, and the `delete_after` timer is active.
 - `deleted`: The batch's local files and directory have been permanently removed by the cleanup worker.
 
+**Note on Waveform Extraction:**
+Resona uses a professional **streaming, min/max peak-envelope extraction** pipeline.
+- **Low Memory:** Audio is processed in chunks; even hour-long files consume only a few kilobytes of RAM during extraction.
+- **Visual Fidelity:** Unlike RMS-based systems, this pipeline preserves transients (drum hits/drops) and applies a perceptual gamma curve to enhance visibility of quiet details.
+- **Symmetric Data:** Each window contains both a minimum and maximum peak, allowing for professional, symmetric waveform rendering.
+
 **Note on Task Statuses:** 
 Tasks transition through several states: `pending` $\rightarrow$ `processing` $\rightarrow$ `downloading` $\rightarrow$ `success` or `failed`. 
 - `processing`: The task is in the active batch queue and waiting for its turn in the sequential processing loop.
@@ -48,7 +54,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.5.2"
+  "version": "0.6.0"
 }
 ```
 
@@ -81,7 +87,7 @@ Initialize a new ingestion batch.
 | `max_batch_size` | int | 50 | Maximum number of tasks allowed in this batch. |
 | `max_batch_storage` | string | "5G" | Total byte limit for the batch (e.g., "1G", "500M"). |
 | `allowed_services` | array | [] | List of permitted providers: `["GOOGLE_DRIVE", "DROPBOX", "DIRECT"]`. Empty = All allowed. |
-| `waveform_resolution`| int | 512 | Number of peak data points to extract per audio file. |
+| `waveform_resolution`| int | 4096 | Number of window pairs (min/max) to extract per audio file. |
 
 **Response (200 OK):**
 ```json
@@ -166,11 +172,19 @@ Retrieve the status and all processed data for tasks in a batch.
         "duration_seconds": 120.5
       },
       "waveform": [0.1, 0.45, "..."],
-      "waveform_resolution": 512
+      "waveform_peaks_b64": "base64-encoded-binary-string",
+      "waveform_resolution": 4096
     }
   ]
 }
 ```
+
+#### Waveform Format Details
+1. **`waveform` (Legacy):** A 1D array of floats representing the positive `maxPeak` for each window. Maintained for backward compatibility.
+2. **`waveform_peaks_b64` (Modern):** A base64-encoded binary string. When decoded, it is an array of `int16_t` pairs: `[min0, max0, min1, max1, ...]`.
+   - **Quantization:** Float peaks $[-1.0, 1.0]$ are multiplied by $32767$ to store as `int16`.
+   - **Consumption:** Decode base64 to a `Uint8Array`, then interpret as an `Int16Array`.
+   - **Advantage:** Vastly more network-efficient than JSON arrays and allows for symmetric, professional rendering.
 
 ### 4.5. Mark a Batch as Complete
 Finalizes a batch. No more tasks can be added, and the `delete_after` cleanup timer begins.

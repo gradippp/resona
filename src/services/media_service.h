@@ -1,8 +1,14 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace services {
+
+struct WaveformPointInt16 {
+    int16_t minPeak;
+    int16_t maxPeak;
+};
 
 struct MediaResult {
     bool success = false;
@@ -10,6 +16,7 @@ struct MediaResult {
     std::string format = "";
     float duration_seconds = 0.0f;
     std::vector<float> waveform_data;
+    std::vector<WaveformPointInt16> waveform_peaks;
     std::string error_message = "";
 };
 

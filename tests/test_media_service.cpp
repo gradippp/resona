@@ -61,10 +61,16 @@ TEST_CASE("MediaService extraction", "[services][media_service]") {
         REQUIRE(res.format == "WAV");
         REQUIRE(std::abs(res.duration_seconds - 1.0f) < 0.01f);
         REQUIRE(res.waveform_data.size() == 512);
+        REQUIRE(res.waveform_peaks.size() == 512);
         
-        // Since it's a 440Hz sine wave, most peaks should be near 1.0
-        for (float val : res.waveform_data) {
-            REQUIRE(val > 0.9f);
+        // Since it's a 440Hz sine wave, peaks should be near 1.0 (normalized)
+        // and symmetric around the center.
+        for (int i = 0; i < 512; ++i) {
+            REQUIRE(res.waveform_data[i] > 0.9f);
+            
+            // Check quantized peaks
+            REQUIRE(res.waveform_peaks[i].maxPeak > 29000); // ~0.9 * 32767
+            REQUIRE(res.waveform_peaks[i].minPeak < -29000); // ~ -0.9 * 32767
         }
 
         std::filesystem::remove(test_path);
