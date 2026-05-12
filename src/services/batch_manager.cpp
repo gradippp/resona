@@ -705,7 +705,7 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
             json opts = json::parse(std::string(opt_buf.data(), opt_len));
             b.options.wait_duration = opts.value("wait_duration", "5s"); b.options.max_retries = opts.value("max_retries", 0);
             b.options.max_batch_size = opts.value("max_batch_size", 0); b.options.max_batch_storage = opts.value("max_batch_storage", "");
-            b.options.allowed_services = opts.value("allowed_services", std::vector<std::string>{}); b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 512);
+            b.options.allowed_services = opts.value("allowed_services", std::vector<std::string>{}); b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
         } catch (const std::exception& e) {
             CROW_LOG_WARNING << "JSON parse failed for batch options: " << e.what();
         }

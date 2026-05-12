@@ -58,8 +58,9 @@ MediaResult MediaService::extract_waveform(const std::string& filepath, int reso
     res.waveform_data.resize(resolution, 0.0f);
 
     if (totalSampleCount > 0) {
-        // Calculate peaks for each window
+        // Calculate peaks for each window using a Peak/RMS blend
         double samplesPerWindow = (double)totalSampleCount / (double)resolution;
+        float globalMax = 0.0f;
         
         for (int i = 0; i < resolution; ++i) {
             size_t startFrame = (size_t)(i * samplesPerWindow);
@@ -67,13 +68,34 @@ MediaResult MediaService::extract_waveform(const std::string& filepath, int reso
             if (endFrame > totalSampleCount) endFrame = (size_t)totalSampleCount;
 
             float maxAmp = 0.0f;
+            float sumSq = 0.0f;
+            int windowSampleCount = 0;
+
             for (size_t j = startFrame; j < endFrame; ++j) {
-                for (unsigned int c = 0; j < totalSampleCount && c < channels; ++c) {
-                    float val = std::abs(pSampleData[j * channels + c]);
+                for (unsigned int c = 0; c < channels; ++c) {
+                    size_t index = j * channels + c;
+                    if (index >= totalSampleCount * channels) break;
+                    
+                    float val = std::abs(pSampleData[index]);
                     if (val > maxAmp) maxAmp = val;
+                    sumSq += val * val;
+                    windowSampleCount++;
                 }
             }
-            res.waveform_data[i] = maxAmp;
+            
+            float rms = (windowSampleCount > 0) ? std::sqrt(sumSq / windowSampleCount) : 0.0f;
+            
+            // Blend Peak (50%) and RMS (50%) for organic visual detail
+            float blended = (maxAmp * 0.5f) + (rms * 0.5f);
+            res.waveform_data[i] = blended;
+            if (blended > globalMax) globalMax = blended;
+        }
+
+        // Global Normalization: Ensure the loudest part is 1.0
+        if (globalMax > 0.0f) {
+            for (float& p : res.waveform_data) {
+                p /= globalMax;
+            }
         }
     }
 
