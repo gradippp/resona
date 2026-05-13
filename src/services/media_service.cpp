@@ -17,9 +17,11 @@ namespace services {
 
 MediaResult MediaService::extract_waveform(const std::string& filepath, int resolution) {
     MediaResult res;
+    CROW_LOG_INFO << "Extracting waveform for: " << filepath << " (Resolution: " << resolution << ")";
     
     if (!std::filesystem::exists(filepath)) {
         res.error_message = "File not found";
+        CROW_LOG_ERROR << "Waveform extraction failed: File not found: " << filepath;
         return res;
     }
 
@@ -63,11 +65,13 @@ MediaResult MediaService::extract_waveform(const std::string& filepath, int reso
         }
     } else {
         res.error_message = "Unsupported file format: " + ext;
+        CROW_LOG_ERROR << "Waveform extraction failed: " << res.error_message;
         return res;
     }
 
     if (!opened) {
         res.error_message = "Failed to open audio file";
+        CROW_LOG_ERROR << "Waveform extraction failed: " << res.error_message << ": " << filepath;
         return res;
     }
 
@@ -75,6 +79,7 @@ MediaResult MediaService::extract_waveform(const std::string& filepath, int reso
         // For some files (like some MP3s), frame count might not be in the header.
         // In a real production system, we might need a pre-scan, but for now we fail if unknown.
         res.error_message = "Unknown or zero frame count";
+        CROW_LOG_ERROR << "Waveform extraction failed: " << res.error_message << ": " << filepath;
         if (ext == ".wav") drwav_uninit(&wav);
         else if (ext == ".mp3") drmp3_uninit(&mp3);
         else if (ext == ".flac") drflac_close(pFlac);

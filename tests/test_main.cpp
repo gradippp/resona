@@ -1,10 +1,15 @@
 #include <catch2/catch_session.hpp>
 #include "services/database_service.h"
+#include "utils/logger.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
 
 int main(int argc, char* argv[]) {
+    // Set custom logger
+    static utils::CustomLogger logger;
+    crow::logger::setHandler(&logger);
+
     auto& db = services::DatabaseService::get_instance();
     int attempts = 0;
     bool connected = false;

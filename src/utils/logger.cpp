@@ -3,11 +3,16 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 namespace utils {
 
 void CustomLogger::log(const std::string& message, crow::LogLevel level) {
-    std::cout << "[" << get_timestamp() << "] [" << level_to_string(level) << "] " << message << std::endl;
+    if (message.find("Request: ") == 0 || message.find("Response: ") == 0) {
+        return;
+    }
+    std::cerr << "[" << get_timestamp() << "] [" << std::this_thread::get_id() << "] [" 
+              << std::left << std::setw(8) << level_to_string(level) << "] " << message << std::endl;
 }
 
 std::string CustomLogger::get_timestamp() {

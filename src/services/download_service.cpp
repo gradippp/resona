@@ -44,7 +44,8 @@ DownloadResult DownloadService::download_file(const std::string& url, const std:
 
     // Ensure directory exists
     std::filesystem::path dest_path(destination);
-    if (dest_path.has_parent_path()) {
+    if (dest_path.has_parent_path() && !std::filesystem::exists(dest_path.parent_path())) {
+        CROW_LOG_INFO << "Creating destination directory: " << dest_path.parent_path();
         std::filesystem::create_directories(dest_path.parent_path());
     }
 
@@ -111,6 +112,7 @@ std::string DownloadService::format_url(const std::string& url) {
     std::smatch match;
 
     if (std::regex_search(url, match, db_regex)) {
+        CROW_LOG_INFO << "Detected Dropbox URL, rewriting for direct download.";
         std::string base_url = match[1].str();
         std::string query = match[2].str();
         
@@ -127,6 +129,7 @@ std::string DownloadService::format_url(const std::string& url) {
     // Handle Google Drive URLs
     std::regex gd_regex(R"(https?://(?:www\.)?drive\.google\.com/file/d/([^/?#]+)(?:/.*)?)", std::regex::icase);
     if (std::regex_search(url, match, gd_regex)) {
+        CROW_LOG_INFO << "Detected Google Drive URL, rewriting for direct download.";
         std::string file_id = match[1].str();
         formatted = "https://drive.google.com/uc?export=download&id=" + file_id;
         return formatted;
