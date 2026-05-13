@@ -54,7 +54,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.6.0"
+  "version": "0.7.0"
 }
 ```
 
@@ -112,7 +112,7 @@ Queue a specific media ingestion task.
 **Response (202 Accepted):**
 ```json
 {
-  "message": "Task queued in batch <batch_id>"
+  "id": "task-uuid"
 }
 ```
 
@@ -152,11 +152,7 @@ Transitions a `pending` batch to the `awaiting` state to begin the background mo
 `POST /v1/batch/{batch_id}/start`
 
 **Response (200 OK):**
-```json
-{
-  "message": "Batch <batch_id> started"
-}
-```
+*No response body.*
 
 **Error (404 Not Found):**
 ```json
@@ -169,7 +165,7 @@ Transitions a `pending` batch to the `awaiting` state to begin the background mo
 ```
 
 ### 4.4. Check Batch Status & Results
-Retrieve the status and all processed data for tasks in a batch.
+Retrieve the status and results of tasks in a batch.
 
 **Request:**
 `GET /v1/batch/{batch_id}`
@@ -183,27 +179,13 @@ Retrieve the status and all processed data for tasks in a batch.
   "tasks": [
     {
       "id": "task-uuid",
-      "file_id": "https://...",
-      "destination_path": "/app/data/b1/t1.wav",
-      "status": "success",
-      "local_url": "file:///...",
-      "metadata": {
-        "file_size": 1048576,
-        "format": "WAV",
-        "duration_seconds": 120.5
-      },
-      "waveform_peaks_b64": "base64-encoded-binary-string",
-      "waveform_resolution": 4096
+      "status": "success"
     }
   ]
 }
 ```
 
-#### Waveform Format Details
-1. **`waveform_peaks_b64`:** A base64-encoded binary string. When decoded, it is an array of `int16_t` pairs: `[min0, max0, min1, max1, ...]`.
-   - **Quantization:** Float peaks $[-1.0, 1.0]$ are multiplied by $32767$ to store as `int16`.
-   - **Consumption:** Decode base64 to a `Uint8Array`, then interpret as an `Int16Array`.
-   - **Advantage:** Vastly more network-efficient than JSON arrays and allows for symmetric, professional rendering.
+---
 
 ### 4.5. Mark a Batch as Complete
 Finalizes a batch. No more tasks can be added, and the `delete_after` cleanup timer begins.
@@ -235,7 +217,27 @@ Direct lookup of a successfully ingested file by its unique Task UUID.
 `GET /v1/ingested/{task_id}`
 
 **Response (200 OK):**
-Same object schema as an individual item in the `tasks` array from section 4.4.
+```json
+{
+  "id": "task-uuid",
+  "file_id": "https://...",
+  "status": "success",
+  "local_url": "file:///...",
+  "metadata": {
+    "file_size": 1048576,
+    "format": "WAV",
+    "duration_seconds": 120.5
+  },
+  "waveform_peaks_b64": "base64-encoded-binary-string",
+  "waveform_resolution": 4096
+}
+```
+
+#### Waveform Format Details
+1. **`waveform_peaks_b64`:** A base64-encoded binary string. When decoded, it is an array of `int16_t` pairs: `[min0, max0, min1, max1, ...]`.
+   - **Quantization:** Float peaks $[-1.0, 1.0]$ are multiplied by $32767$ to store as `int16`.
+   - **Consumption:** Decode base64 to a `Uint8Array`, then interpret as an `Int16Array`.
+   - **Advantage:** Vastly more network-efficient than JSON arrays and allows for symmetric, professional rendering.
 
 ### 5.2. Stream Ingested File
 Stream a successfully ingested media file. This endpoint is optimized for audio streaming and supports seeking via standard HTTP Range requests, making it compatible with HTML5 `<audio>` and `<video>` tags.

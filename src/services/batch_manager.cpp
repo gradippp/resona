@@ -113,7 +113,7 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
     return id;
 }
 
-bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRequest& req) {
+std::optional<std::string> BatchManager::add_task(const std::string& batch_id, const models::AddTaskRequest& req) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     
     std::string status;
@@ -123,17 +123,17 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* check_query = "SELECT status, options FROM batches WHERE id = ?";
         utils::StatementWrapper stmt(conn);
-        if (!stmt.isValid() || !stmt.prepare(check_query)) return false;
+        if (!stmt.isValid() || !stmt.prepare(check_query)) return std::nullopt;
 
         MYSQL_BIND bind[1];
         memset(bind, 0, sizeof(bind));
         stmt.bind_string_param(0, batch_id, bind);
 
-        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return false;
+        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return std::nullopt;
 
         if (stmt.num_rows() == 0) {
             CROW_LOG_WARNING << "Attempted to add task to non-existent batch: " << batch_id;
-            return false;
+            return std::nullopt;
         }
 
         MYSQL_BIND res_bind[2];
@@ -144,7 +144,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = status_buf; res_bind[0].buffer_length = sizeof(status_buf); res_bind[0].length = &status_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
 
-        if (!stmt.bind_result(res_bind) || stmt.fetch()) return false;
+        if (!stmt.bind_result(res_bind) || stmt.fetch()) return std::nullopt;
 
         status = std::string(status_buf, status_len);
         options_str = std::string(opt_buf.data(), opt_len);
@@ -152,7 +152,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     
     if (status != "pending" && status != "awaiting") {
         CROW_LOG_WARNING << "Attempted to add task to batch that is " << status << ": " << batch_id;
-        return false;
+        return std::nullopt;
     }
 
     json opts = parse_batch_options(options_str);
@@ -175,7 +175,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
                 if (stmt.bind_result(res_bind) && !stmt.fetch()) {
                     if (count >= max_size) {
                         CROW_LOG_WARNING << "Batch " << batch_id << " has reached max size of " << max_size;
-                        return false;
+                        return std::nullopt;
                     }
                 }
             }
@@ -192,7 +192,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         for (const auto& svc : allowed) { if (svc == url_type) { service_allowed = true; break; } }
         if (!service_allowed) {
             CROW_LOG_WARNING << "Service type '" << url_type << "' not allowed for URL: " << req.file_id;
-            return false;
+            return std::nullopt;
         }
     }
 
@@ -211,7 +211,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         utils::StatementWrapper stmt(conn);
-        if (!stmt.isValid() || !stmt.prepare(insert_query)) return false;
+        if (!stmt.isValid() || !stmt.prepare(insert_query)) return std::nullopt;
         
         MYSQL_BIND bind[4];
         memset(bind, 0, sizeof(bind));
@@ -219,12 +219,12 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         stmt.bind_string_param(1, batch_id, bind);
         stmt.bind_string_param(2, req.file_id, bind);
         stmt.bind_string_param(3, dest_path_str, bind);
-        if (!stmt.bind_params(bind) || !stmt.execute()) return false;
+        if (!stmt.bind_params(bind) || !stmt.execute()) return std::nullopt;
     }
     
     CROW_LOG_INFO << "Added task " << task_id << " to batch " << batch_id;
     task_cv_.notify_one();
-    return true;
+    return task_id;
 }
 
 bool BatchManager::start_batch(const std::string& batch_id) {
@@ -650,27 +650,21 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
         b.options.allowed_content_types = opts.value("allowed_content_types", std::vector<std::string>{});
         b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
 
-        const char* task_query = "SELECT id, file_id, content_type, status FROM tasks WHERE batch_id = ?";
+        const char* task_query = "SELECT id, status FROM tasks WHERE batch_id = ?";
         utils::StatementWrapper t_stmt(conn);
         if (t_stmt.isValid() && t_stmt.prepare(task_query)) {
             if (t_stmt.bind_params(bind) && t_stmt.execute() && t_stmt.store_result()) {
-                MYSQL_BIND res_bind_tasks[4]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
+                MYSQL_BIND res_bind_tasks[2]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
                 char id_buf[37]; unsigned long id_len = 0;
-                std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
-                std::vector<char> ct_buf(255); unsigned long ct_len = 0; bool ct_null = false;
                 char t_s_buf[21]; unsigned long t_s_len = 0;
                 
                 res_bind_tasks[0].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[0].buffer = id_buf; res_bind_tasks[0].buffer_length = sizeof(id_buf); res_bind_tasks[0].length = &id_len;
-                res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = f_id_buf.data(); res_bind_tasks[1].buffer_length = f_id_buf.size(); res_bind_tasks[1].length = &f_id_len;
-                res_bind_tasks[2].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[2].buffer = ct_buf.data(); res_bind_tasks[2].buffer_length = ct_buf.size(); res_bind_tasks[2].length = &ct_len; res_bind_tasks[2].is_null = (char*)&ct_null;
-                res_bind_tasks[3].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[3].buffer = t_s_buf; res_bind_tasks[3].buffer_length = sizeof(t_s_buf); res_bind_tasks[3].length = &t_s_len;
+                res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = t_s_buf; res_bind_tasks[1].buffer_length = sizeof(t_s_buf); res_bind_tasks[1].length = &t_s_len;
                 
                 if (t_stmt.bind_result(res_bind_tasks)) {
                     while (!t_stmt.fetch()) {
-                        models::Task t;
+                        models::TaskSummary t;
                         t.id = std::string(id_buf, id_len);
-                        t.file_id = std::string(f_id_buf.data(), f_id_len);
-                        t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len);
                         t.status = std::string(t_s_buf, t_s_len);
                         b.tasks.push_back(t);
                     }

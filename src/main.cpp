@@ -77,6 +77,12 @@ int main() {
         utils::send_error(res, "The requested resource was not found", 404);
     });
 
-    std::cout << "Resona v" << RESONA_VERSION << " listening on port 8080..." << std::endl;
-    app.port(8080).multithreaded().run();
+    const char* hostname_env = std::getenv("HOSTNAME");
+    std::string hostname = hostname_env ? hostname_env : "0.0.0.0";
+    
+    const char* port_env = std::getenv("PORT");
+    uint16_t port = port_env ? static_cast<uint16_t>(std::stoi(port_env)) : 8080;
+
+    std::cout << "Resona v" << RESONA_VERSION << " listening on " << hostname << ":" << port << "..." << std::endl;
+    app.bindaddr(hostname).port(port).multithreaded().run();
 }
