@@ -71,6 +71,11 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
             cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\"}"}
         );
         REQUIRE(add_res1.status_code == 202);
+        auto add_json1 = json::parse(add_res1.text);
+        REQUIRE(add_json1.contains("id"));
+        REQUIRE_FALSE(add_json1.contains("batch_id"));
+        std::string task_id1 = add_json1["id"];
+        REQUIRE(!task_id1.empty());
 
         // Wait for processing (wait_duration 2s + some buffer)
         std::this_thread::sleep_for(std::chrono::milliseconds(6000));
@@ -80,6 +85,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto status_json1 = json::parse(status_res1.text);
         REQUIRE(status_json1["status"] == "awaiting");
         REQUIRE(status_json1["tasks"].size() == 1);
+        REQUIRE(status_json1["tasks"][0]["id"] == task_id1);
         REQUIRE(status_json1["tasks"][0]["status"] == "success");
         
         // VERIFY SIMPLIFICATION: Task in batch response should only have id and status
@@ -96,6 +102,11 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
             cpr::Body{"{\"file_id\": \"http://localhost:8081/v1/version\"}"}
         );
         REQUIRE(add_res2.status_code == 202);
+        auto add_json2 = json::parse(add_res2.text);
+        REQUIRE(add_json2.contains("id"));
+        REQUIRE_FALSE(add_json2.contains("batch_id"));
+        std::string task_id2 = add_json2["id"];
+        REQUIRE(task_id1 != task_id2);
 
         // Wait for second task
         std::this_thread::sleep_for(std::chrono::milliseconds(6000));

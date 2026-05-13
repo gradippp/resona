@@ -112,7 +112,7 @@ Queue a specific media ingestion task.
 **Response (202 Accepted):**
 ```json
 {
-  "message": "Task queued in batch <batch_id>"
+  "id": "task-uuid"
 }
 ```
 
@@ -152,11 +152,7 @@ Transitions a `pending` batch to the `awaiting` state to begin the background mo
 `POST /v1/batch/{batch_id}/start`
 
 **Response (200 OK):**
-```json
-{
-  "message": "Batch <batch_id> started"
-}
-```
+*No response body.*
 
 **Error (404 Not Found):**
 ```json

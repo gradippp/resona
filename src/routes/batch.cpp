@@ -46,9 +46,10 @@ namespace batch {
             try {
                 auto task_req = body.get<models::AddTaskRequest>();
 
-                if (manager.add_task(batch_id, task_req)) {
+                auto task_id = manager.add_task(batch_id, task_req);
+                if (task_id) {
                     nlohmann::json response;
-                    response["message"] = "Task queued in batch " + batch_id;
+                    response["id"] = *task_id;
                     res = utils::json_response(response, 202);
                 } else {
                     res = utils::error_response("Batch not found or already started", 404);
@@ -62,9 +63,7 @@ namespace batch {
         // POST /v1/batch/{batch_id}/start - Start a Batch
         CROW_ROUTE(app, "/v1/batch/<string>/start").methods(crow::HTTPMethod::POST)([&manager](std::string batch_id) {
             if (manager.start_batch(batch_id)) {
-                nlohmann::json response;
-                response["message"] = "Batch " + batch_id + " started";
-                return utils::json_response(response);
+                return crow::response(200);
             } else {
                 return utils::error_response("Batch not found or already started", 404);
             }

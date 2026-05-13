@@ -113,7 +113,7 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
     return id;
 }
 
-bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRequest& req) {
+std::optional<std::string> BatchManager::add_task(const std::string& batch_id, const models::AddTaskRequest& req) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     
     std::string status;
@@ -123,17 +123,17 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* check_query = "SELECT status, options FROM batches WHERE id = ?";
         utils::StatementWrapper stmt(conn);
-        if (!stmt.isValid() || !stmt.prepare(check_query)) return false;
+        if (!stmt.isValid() || !stmt.prepare(check_query)) return std::nullopt;
 
         MYSQL_BIND bind[1];
         memset(bind, 0, sizeof(bind));
         stmt.bind_string_param(0, batch_id, bind);
 
-        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return false;
+        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return std::nullopt;
 
         if (stmt.num_rows() == 0) {
             CROW_LOG_WARNING << "Attempted to add task to non-existent batch: " << batch_id;
-            return false;
+            return std::nullopt;
         }
 
         MYSQL_BIND res_bind[2];
@@ -144,7 +144,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = status_buf; res_bind[0].buffer_length = sizeof(status_buf); res_bind[0].length = &status_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
 
-        if (!stmt.bind_result(res_bind) || stmt.fetch()) return false;
+        if (!stmt.bind_result(res_bind) || stmt.fetch()) return std::nullopt;
 
         status = std::string(status_buf, status_len);
         options_str = std::string(opt_buf.data(), opt_len);
@@ -152,7 +152,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     
     if (status != "pending" && status != "awaiting") {
         CROW_LOG_WARNING << "Attempted to add task to batch that is " << status << ": " << batch_id;
-        return false;
+        return std::nullopt;
     }
 
     json opts = parse_batch_options(options_str);
@@ -175,7 +175,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
                 if (stmt.bind_result(res_bind) && !stmt.fetch()) {
                     if (count >= max_size) {
                         CROW_LOG_WARNING << "Batch " << batch_id << " has reached max size of " << max_size;
-                        return false;
+                        return std::nullopt;
                     }
                 }
             }
@@ -192,7 +192,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         for (const auto& svc : allowed) { if (svc == url_type) { service_allowed = true; break; } }
         if (!service_allowed) {
             CROW_LOG_WARNING << "Service type '" << url_type << "' not allowed for URL: " << req.file_id;
-            return false;
+            return std::nullopt;
         }
     }
 
@@ -211,7 +211,7 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         utils::StatementWrapper stmt(conn);
-        if (!stmt.isValid() || !stmt.prepare(insert_query)) return false;
+        if (!stmt.isValid() || !stmt.prepare(insert_query)) return std::nullopt;
         
         MYSQL_BIND bind[4];
         memset(bind, 0, sizeof(bind));
@@ -219,12 +219,12 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         stmt.bind_string_param(1, batch_id, bind);
         stmt.bind_string_param(2, req.file_id, bind);
         stmt.bind_string_param(3, dest_path_str, bind);
-        if (!stmt.bind_params(bind) || !stmt.execute()) return false;
+        if (!stmt.bind_params(bind) || !stmt.execute()) return std::nullopt;
     }
     
     CROW_LOG_INFO << "Added task " << task_id << " to batch " << batch_id;
     task_cv_.notify_one();
-    return true;
+    return task_id;
 }
 
 bool BatchManager::start_batch(const std::string& batch_id) {
