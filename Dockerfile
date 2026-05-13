@@ -51,6 +51,9 @@ WORKDIR /app
 COPY --from=builder /app/build/resona /app/resona
 COPY --from=builder /app/libs/ /usr/lib/
 
+ENV HOSTNAME=0.0.0.0
+ENV PORT=8080
+
 EXPOSE 8080
 
 CMD ["./resona"]
