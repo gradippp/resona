@@ -87,6 +87,7 @@ Initialize a new ingestion batch.
 | `max_batch_size` | int | 50 | Maximum number of tasks allowed in this batch. |
 | `max_batch_storage` | string | "5G" | Total byte limit for the batch (e.g., "1G", "500M"). |
 | `allowed_services` | array | [] | List of permitted providers: `["GOOGLE_DRIVE", "DROPBOX", "DIRECT"]`. Empty = All allowed. |
+| `allowed_content_types` | array | [] | List of permitted MIME types (e.g., `["audio/mpeg", "audio/wav"]`). Empty = All allowed. |
 | `waveform_resolution`| int | 4096 | Number of window pairs (min/max) to extract per audio file. |
 
 **Response (200 OK):**
@@ -111,9 +112,10 @@ Queue a specific media ingestion task.
 **Response (202 Accepted):**
 ```json
 {
-  "message": "Task added to batch"
+  "message": "Task queued in batch <batch_id>"
 }
 ```
+
 **Error (400 Bad Request):**
 ```json
 {
@@ -133,6 +135,16 @@ or
 }
 ```
 
+**Error (404 Not Found):**
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Batch not found or already started"
+}
+```
+
 ### 4.3. Start a Batch
 Transitions a `pending` batch to the `awaiting` state to begin the background monitor loop.
 
@@ -142,8 +154,17 @@ Transitions a `pending` batch to the `awaiting` state to begin the background mo
 **Response (200 OK):**
 ```json
 {
-  "batch_id": "uuid-v4-string",
-  "status": "awaiting"
+  "message": "Batch <batch_id> started"
+}
+```
+
+**Error (404 Not Found):**
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Batch not found or already started"
 }
 ```
 
@@ -171,7 +192,6 @@ Retrieve the status and all processed data for tasks in a batch.
         "format": "WAV",
         "duration_seconds": 120.5
       },
-      "waveform": [0.1, 0.45, "..."],
       "waveform_peaks_b64": "base64-encoded-binary-string",
       "waveform_resolution": 4096
     }
@@ -180,8 +200,7 @@ Retrieve the status and all processed data for tasks in a batch.
 ```
 
 #### Waveform Format Details
-1. **`waveform` (Legacy):** A 1D array of floats representing the positive `maxPeak` for each window. Maintained for backward compatibility.
-2. **`waveform_peaks_b64` (Modern):** A base64-encoded binary string. When decoded, it is an array of `int16_t` pairs: `[min0, max0, min1, max1, ...]`.
+1. **`waveform_peaks_b64`:** A base64-encoded binary string. When decoded, it is an array of `int16_t` pairs: `[min0, max0, min1, max1, ...]`.
    - **Quantization:** Float peaks $[-1.0, 1.0]$ are multiplied by $32767$ to store as `int16`.
    - **Consumption:** Decode base64 to a `Uint8Array`, then interpret as an `Int16Array`.
    - **Advantage:** Vastly more network-efficient than JSON arrays and allows for symmetric, professional rendering.
@@ -194,6 +213,16 @@ Finalizes a batch. No more tasks can be added, and the `delete_after` cleanup ti
 
 **Response (200 OK):**
 `{"batch_id": "uuid", "status": "completed"}`
+
+**Error (404 Not Found):**
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Batch not found or not in awaiting state"
+}
+```
 
 ---
 
@@ -220,8 +249,9 @@ Stream a successfully ingested media file. This endpoint is optimized for audio 
 **Response:**
 - `200 OK`: Returns the full file content (standard download/stream).
 - `206 Partial Content`: Returns the requested byte range. Essential for seeking in audio/video players.
-- `400 Bad Request`: If the task hasn't finished downloading yet.
-- `404 Not Found`: If the Task UUID doesn't exist or the file has been deleted.
+- `400 Bad Request`: If the task hasn't finished downloading yet or if the `Range` header is invalid.
+- `403 Forbidden`: If the file path is invalid or a path traversal attempt is detected.
+- `404 Not Found`: If the Task UUID doesn't exist or the file has been deleted from disk.
 - `416 Range Not Satisfiable`: If the requested byte range is outside the file's actual size.
 
 **Headers in Response:**

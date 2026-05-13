@@ -67,5 +67,15 @@ ctest --output-on-failure -C Release
 For detailed information on available endpoints, request formats, and responses, please refer to:
 👉 **[API.md](./API.md)**
 
+## Security & Architecture Assumptions
+Resona is designed to operate as a specialized worker microservice within a larger, managed infrastructure. Consequently, the following security and operational concerns are assumed to be handled by an upstream orchestrator or API gateway:
+- **SSRF Mitigation**: The service performs fetches for any provided URL. Upstream units must validate and sanitize URLs (e.g., resolving hostnames and checking against private/local IP ranges) before passing them to Resona to prevent Server-Side Request Forgery.
+- **Global Rate Limiting**: There are no internal global rate limits across all users. The orchestrating service is responsible for implementing rate limits to prevent overall resource exhaustion.
+
+### Built-in Constraints
+While global limits are deferred, Resona enforces the following per-batch constraints to protect the immediate environment:
+- **Batch Size Limit**: Each batch is limited to a maximum number of files (default: 50).
+- **Storage Quota**: Batches enforce a total cumulative file size limit (default: 5GB) during the download phase to prevent runaway storage consumption.
+
 ## License
 This project is licensed under the **MIT License**. See the [LICENSE](./LICENSE) file for details.

@@ -5,6 +5,9 @@
 #include "../utils/uuid.h"
 #include "../utils/size_parser.h"
 #include "../utils/base64.h"
+#include "../utils/magic_bytes.h"
+#include "../utils/db_utils.h"
+#include "../utils/time_utils.h"
 #include "crow/logging.h"
 #include <thread>
 #include <chrono>
@@ -16,7 +19,7 @@ using json = nlohmann::json;
 
 namespace services {
 
-BatchManager::BatchManager() {
+BatchManager::BatchManager() : stop_flag_(false) {
     const char* env_dir = std::getenv("STORAGE_DIRECTORY");
     storage_dir_ = env_dir ? env_dir : "data";
     if (!std::filesystem::exists(storage_dir_)) {
@@ -25,22 +28,54 @@ BatchManager::BatchManager() {
     }
 }
 
-static std::chrono::milliseconds parse_duration_ms(const std::string& duration_str) {
-    if (duration_str.empty()) return std::chrono::milliseconds(0);
-    try {
-        size_t pos = 0;
-        int value = std::stoi(duration_str, &pos);
-        std::string unit = duration_str.substr(pos);
-        if (unit == "H" || unit == "h") return std::chrono::hours(value);
-        if (unit == "m") return std::chrono::minutes(value);
-        if (unit == "s") return std::chrono::seconds(value);
-        if (unit == "ms") return std::chrono::milliseconds(value);
-    } catch (...) {}
-    return std::chrono::milliseconds(0);
+BatchManager::~BatchManager() {
+    stop();
 }
 
-static std::chrono::seconds parse_duration(const std::string& duration_str) {
-    return std::chrono::duration_cast<std::chrono::seconds>(parse_duration_ms(duration_str));
+void BatchManager::stop() {
+    if (stop_flag_.exchange(true)) return;
+    
+    CROW_LOG_INFO << "Stopping BatchManager monitors...";
+    {
+        std::lock_guard<std::mutex> lock(cv_mutex_);
+        task_cv_.notify_all();
+    }
+
+    std::vector<std::thread> to_join;
+    {
+        std::lock_guard<std::mutex> lock(thread_mutex_);
+        to_join.swap(monitor_threads_);
+    }
+
+    for (auto& t : to_join) {
+        if (t.joinable()) t.join();
+    }
+    CROW_LOG_INFO << "BatchManager stopped.";
+}
+
+json BatchManager::parse_batch_options(const std::string& options_str) {
+    json opts;
+    try {
+        opts = json::parse(options_str);
+    } catch (...) {
+        opts = json::object();
+    }
+    
+    // Ensure all expected keys have defaults if missing
+    auto ensure_default = [&](const std::string& key, const json& val) {
+        if (!opts.contains(key) || opts[key].is_null()) opts[key] = val;
+    };
+
+    ensure_default("wait_duration", "5s");
+    ensure_default("max_retries", 3);
+    ensure_default("max_batch_size", 50);
+    ensure_default("max_batch_storage", "5G");
+    ensure_default("allowed_services", json::array());
+    ensure_default("allowed_content_types", json::array());
+    ensure_default("delete_after", "24H");
+    ensure_default("waveform_resolution", 4096);
+    
+    return opts;
 }
 
 std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
@@ -53,6 +88,7 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
         {"max_batch_size", req.max_batch_size},
         {"max_batch_storage", req.max_batch_storage},
         {"allowed_services", req.allowed_services},
+        {"allowed_content_types", req.allowed_content_types},
         {"delete_after", req.delete_after},
         {"waveform_resolution", req.waveform_resolution}
     };
@@ -62,35 +98,15 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
 
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) {
-            CROW_LOG_ERROR << "mysql_stmt_init() failed";
-            return "";
-        }
-
-        if (mysql_stmt_prepare(stmt, query, strlen(query))) {
-            CROW_LOG_ERROR << "mysql_stmt_prepare() failed: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return "";
-        }
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(query)) return "";
 
         MYSQL_BIND bind[2];
         memset(bind, 0, sizeof(bind));
+        stmt.bind_string_param(0, id, bind);
+        stmt.bind_string_param(1, options_str, bind);
 
-        bind[0].buffer_type = MYSQL_TYPE_STRING;
-        bind[0].buffer = (char*)id.c_str();
-        bind[0].buffer_length = id.length();
-
-        bind[1].buffer_type = MYSQL_TYPE_STRING;
-        bind[1].buffer = (char*)options_str.c_str();
-        bind[1].buffer_length = options_str.length();
-
-        if (mysql_stmt_bind_param(stmt, bind) || mysql_stmt_execute(stmt)) {
-            CROW_LOG_ERROR << "Failed to execute create_batch stmt: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return "";
-        }
-        mysql_stmt_close(stmt);
+        if (!stmt.bind_params(bind) || !stmt.execute()) return "";
     }
     
     CROW_LOG_INFO << "Created new batch: " << id << " (delete_after: " << req.delete_after << ")";
@@ -106,26 +122,16 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* check_query = "SELECT status, options FROM batches WHERE id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) return false;
-
-        if (mysql_stmt_prepare(stmt, check_query, strlen(check_query))) {
-            mysql_stmt_close(stmt);
-            return false;
-        }
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(check_query)) return false;
 
         MYSQL_BIND bind[1];
         memset(bind, 0, sizeof(bind));
-        bind[0].buffer_type = MYSQL_TYPE_STRING;
-        bind[0].buffer = (char*)batch_id.c_str();
-        bind[0].buffer_length = batch_id.length();
+        stmt.bind_string_param(0, batch_id, bind);
 
-        mysql_stmt_bind_param(stmt, bind);
-        mysql_stmt_execute(stmt);
-        mysql_stmt_store_result(stmt);
+        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return false;
 
-        if (mysql_stmt_num_rows(stmt) == 0) {
-            mysql_stmt_close(stmt);
+        if (stmt.num_rows() == 0) {
             CROW_LOG_WARNING << "Attempted to add task to non-existent batch: " << batch_id;
             return false;
         }
@@ -138,13 +144,10 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = status_buf; res_bind[0].buffer_length = sizeof(status_buf); res_bind[0].length = &status_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
 
-        mysql_stmt_bind_result(stmt, res_bind);
-        mysql_stmt_fetch(stmt);
+        if (!stmt.bind_result(res_bind) || stmt.fetch()) return false;
 
         status = std::string(status_buf, status_len);
         options_str = std::string(opt_buf.data(), opt_len);
-
-        mysql_stmt_close(stmt);
     }
     
     if (status != "pending" && status != "awaiting") {
@@ -152,39 +155,30 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
         return false;
     }
 
-    json opts;
-    try { opts = json::parse(options_str); } catch (...) { opts = json::object(); }
+    json opts = parse_batch_options(options_str);
 
     int max_size = opts.value("max_batch_size", 50);
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* count_query = "SELECT COUNT(*) FROM tasks WHERE batch_id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (stmt) {
-            if (!mysql_stmt_prepare(stmt, count_query, strlen(count_query))) {
-                MYSQL_BIND bind[1];
-                memset(bind, 0, sizeof(bind));
-                bind[0].buffer_type = MYSQL_TYPE_STRING;
-                bind[0].buffer = (char*)batch_id.c_str();
-                bind[0].buffer_length = batch_id.length();
-                mysql_stmt_bind_param(stmt, bind);
-                mysql_stmt_execute(stmt);
-                
+        utils::StatementWrapper stmt(conn);
+        if (stmt.isValid() && stmt.prepare(count_query)) {
+            MYSQL_BIND bind[1];
+            memset(bind, 0, sizeof(bind));
+            stmt.bind_string_param(0, batch_id, bind);
+            if (stmt.bind_params(bind) && stmt.execute()) {
                 long long count = 0;
                 MYSQL_BIND res_bind[1];
                 memset(res_bind, 0, sizeof(res_bind));
                 res_bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
                 res_bind[0].buffer = &count;
-                mysql_stmt_bind_result(stmt, res_bind);
-                if (!mysql_stmt_fetch(stmt)) {
+                if (stmt.bind_result(res_bind) && !stmt.fetch()) {
                     if (count >= max_size) {
                         CROW_LOG_WARNING << "Batch " << batch_id << " has reached max size of " << max_size;
-                        mysql_stmt_close(stmt);
                         return false;
                     }
                 }
             }
-            mysql_stmt_close(stmt);
         }
     }
 
@@ -212,26 +206,24 @@ bool BatchManager::add_task(const std::string& batch_id, const models::AddTaskRe
     std::filesystem::path dest_path = base_dir / batch_id / (task_id + ext);
     std::string dest_path_str = dest_path.string();
 
-    const char* insert_query = "INSERT INTO tasks (id, batch_id, file_id, destination_path, status) VALUES (?, ?, ?, ?, 'pending')";
+    const char* insert_query = "INSERT INTO tasks (id, batch_id, file_id, content_type, destination_path, status) VALUES (?, ?, ?, '', ?, 'pending')";
 
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) return false;
-        if (!mysql_stmt_prepare(stmt, insert_query, strlen(insert_query))) {
-            MYSQL_BIND bind[4];
-            memset(bind, 0, sizeof(bind));
-            bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)task_id.c_str(); bind[0].buffer_length = task_id.length();
-            bind[1].buffer_type = MYSQL_TYPE_STRING; bind[1].buffer = (char*)batch_id.c_str(); bind[1].buffer_length = batch_id.length();
-            bind[2].buffer_type = MYSQL_TYPE_STRING; bind[2].buffer = (char*)req.file_id.c_str(); bind[2].buffer_length = req.file_id.length();
-            bind[3].buffer_type = MYSQL_TYPE_STRING; bind[3].buffer = (char*)dest_path_str.c_str(); bind[3].buffer_length = dest_path_str.length();
-            mysql_stmt_bind_param(stmt, bind);
-            mysql_stmt_execute(stmt);
-        }
-        mysql_stmt_close(stmt);
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(insert_query)) return false;
+        
+        MYSQL_BIND bind[4];
+        memset(bind, 0, sizeof(bind));
+        stmt.bind_string_param(0, task_id, bind);
+        stmt.bind_string_param(1, batch_id, bind);
+        stmt.bind_string_param(2, req.file_id, bind);
+        stmt.bind_string_param(3, dest_path_str, bind);
+        if (!stmt.bind_params(bind) || !stmt.execute()) return false;
     }
     
     CROW_LOG_INFO << "Added task " << task_id << " to batch " << batch_id;
+    task_cv_.notify_one();
     return true;
 }
 
@@ -241,36 +233,29 @@ bool BatchManager::start_batch(const std::string& batch_id) {
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* check_query = "SELECT status FROM batches WHERE id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (stmt) {
-            if (!mysql_stmt_prepare(stmt, check_query, strlen(check_query))) {
-                MYSQL_BIND bind[1];
-                memset(bind, 0, sizeof(bind));
-                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)batch_id.c_str(); bind[0].buffer_length = batch_id.length();
-                mysql_stmt_bind_param(stmt, bind);
-                mysql_stmt_execute(stmt);
-                mysql_stmt_store_result(stmt);
-
+        utils::StatementWrapper stmt(conn);
+        if (stmt.isValid() && stmt.prepare(check_query)) {
+            MYSQL_BIND bind[1];
+            memset(bind, 0, sizeof(bind));
+            stmt.bind_string_param(0, batch_id, bind);
+            
+            if (stmt.bind_params(bind) && stmt.execute() && stmt.store_result()) {
                 char status_buf[21]; unsigned long status_len = 0;
                 MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
                 res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = status_buf; res_bind[0].buffer_length = sizeof(status_buf); res_bind[0].length = &status_len;
-                mysql_stmt_bind_result(stmt, res_bind);
-                if (!mysql_stmt_fetch(stmt)) {
+                
+                if (stmt.bind_result(res_bind) && !stmt.fetch()) {
                     std::string status(status_buf, status_len);
                     if (status == "pending") {
                         const char* update_query = "UPDATE batches SET status = 'awaiting' WHERE id = ?";
-                        MYSQL_STMT* u_stmt = mysql_stmt_init(conn);
-                        if (u_stmt) {
-                            if (!mysql_stmt_prepare(u_stmt, update_query, strlen(update_query))) {
-                                mysql_stmt_bind_param(u_stmt, bind);
-                                mysql_stmt_execute(u_stmt);
-                            }
-                            mysql_stmt_close(u_stmt);
+                        utils::StatementWrapper u_stmt(conn);
+                        if (u_stmt.isValid() && u_stmt.prepare(update_query)) {
+                            u_stmt.bind_params(bind);
+                            u_stmt.execute();
                         }
                     }
                 }
             }
-            mysql_stmt_close(stmt);
         }
     }
 
@@ -285,10 +270,11 @@ void BatchManager::recover_stuck_tasks() {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     std::lock_guard<std::mutex> lock(db_mutex_);
     const char* query = "UPDATE tasks SET status = 'pending' WHERE status IN ('processing', 'downloading')";
-    if (mysql_query(conn, query)) {
-        CROW_LOG_ERROR << "Failed to recover stuck tasks: " << mysql_error(conn);
+    utils::StatementWrapper stmt(conn);
+    if (!stmt.isValid() || !stmt.prepare(query) || !stmt.execute()) {
+        CROW_LOG_ERROR << "Failed to recover stuck tasks: " << stmt.last_error();
     } else {
-        unsigned long long affected = mysql_affected_rows(conn);
+        unsigned long long affected = stmt.affected_rows();
         if (affected > 0) {
             CROW_LOG_INFO << "Recovered " << affected << " stuck tasks.";
         }
@@ -299,177 +285,158 @@ void BatchManager::start_monitors() {
     static std::once_flag monitor_started;
     std::call_once(monitor_started, [this]() {
         // Task Processing Monitor
-        std::thread([this]() {
-            while (true) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+        monitor_threads_.emplace_back([this]() {
+            mysql_thread_init();
+            CROW_LOG_INFO << "Task Processing Monitor started.";
+            while (!stop_flag_) {
+                {
+                    std::unique_lock<std::mutex> lock(cv_mutex_);
+                    task_cv_.wait_for(lock, std::chrono::seconds(5), [this] { return stop_flag_.load(); });
+                }
+                if (stop_flag_) break;
+
                 MYSQL* conn = DatabaseService::get_instance().get_connection();
                 struct BatchInfo { std::string id; long long wait_ms; };
                 std::vector<BatchInfo> awaiting_batches;
 
                 {
                     std::lock_guard<std::mutex> lock(db_mutex_);
-                    const char* poll_query = "SELECT id, options FROM batches WHERE status = 'awaiting'";
-                    MYSQL_STMT* stmt = mysql_stmt_init(conn);
-                    if (stmt) {
-                        if (!mysql_stmt_prepare(stmt, poll_query, strlen(poll_query))) {
-                            mysql_stmt_execute(stmt);
-                            mysql_stmt_store_result(stmt);
-
-                            char id_buf[37]; unsigned long id_len = 0;
-                            std::vector<char> opt_buf(65536); unsigned long opt_len = 0;
-                            MYSQL_BIND res_bind[2]; memset(res_bind, 0, sizeof(res_bind));
-                            res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
-                            res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
-                            mysql_stmt_bind_result(stmt, res_bind);
-                            while (!mysql_stmt_fetch(stmt)) {
-                                try {
-                                    json opts = json::parse(std::string(opt_buf.data(), opt_len));
-                                    awaiting_batches.push_back({std::string(id_buf, id_len), parse_duration_ms(opts.value("wait_duration", "5s")).count()});
-                                } catch (...) {}
+                    utils::StatementWrapper stmt(conn);
+                    if (stmt.prepare("SELECT id, options FROM batches WHERE status = 'awaiting'") && stmt.execute() && stmt.store_result()) {
+                        char id_buf[37]; unsigned long id_len;
+                        std::vector<char> opt_buf(65536); unsigned long opt_len;
+                        MYSQL_BIND res_bind[2]; memset(res_bind, 0, sizeof(res_bind));
+                        res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
+                        res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
+                        
+                        if (stmt.bind_result(res_bind)) {
+                            while (stmt.fetch() == 0) {
+                                std::string b_id(id_buf, id_len);
+                                json opts = parse_batch_options(std::string(opt_buf.data(), opt_len));
+                                awaiting_batches.push_back({b_id, utils::parse_duration_ms(opts.value("wait_duration", "5s")).count()});
                             }
                         }
-                        mysql_stmt_close(stmt);
                     }
                 }
 
                 for (const auto& b : awaiting_batches) {
-                    struct TaskInfo { std::string id, file_id, dest; };
+                    if (stop_flag_) break;
+                    struct TaskInfo { std::string id, file_id, content_type, dest; };
                     std::vector<TaskInfo> tasks_to_do;
                     {
                         std::lock_guard<std::mutex> lock(db_mutex_);
-                        const char* task_query = "SELECT id, file_id, destination_path, created_at FROM tasks WHERE batch_id = ? AND status = 'pending' ORDER BY created_at ASC";
-                        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-                        if (stmt) {
-                            if (!mysql_stmt_prepare(stmt, task_query, strlen(task_query))) {
-                                MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)b.id.c_str(); bind[0].buffer_length = b.id.length();
-                                mysql_stmt_bind_param(stmt, bind);
-                                mysql_stmt_execute(stmt);
-                                mysql_stmt_store_result(stmt);
-
-                                if (mysql_stmt_num_rows(stmt) > 0) {
-                                    MYSQL_BIND res_bind[4]; memset(res_bind, 0, sizeof(res_bind));
-                                    char id_buf[37]; unsigned long id_len = 0;
-                                    std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
-                                    std::vector<char> dest_buf(2048); unsigned long dest_len = 0;
-                                    char created_buf[30]; unsigned long created_len = 0;
-                                    res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
-                                    res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
-                                    res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = dest_buf.data(); res_bind[2].buffer_length = dest_buf.size(); res_bind[2].length = &dest_len;
-                                    res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = created_buf; res_bind[3].buffer_length = sizeof(created_buf); res_bind[3].length = &created_len;
-                                    mysql_stmt_bind_result(stmt, res_bind);
-                                    mysql_stmt_fetch(stmt);
-
+                        utils::StatementWrapper stmt(conn);
+                        if (stmt.prepare("SELECT id, file_id, content_type, destination_path, created_at FROM tasks WHERE batch_id = ? AND status = 'pending' ORDER BY created_at ASC")) {
+                            MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+                            stmt.bind_string_param(0, b.id, bind);
+                            if (stmt.bind_params(bind) && stmt.execute() && stmt.store_result()) {
+                                char id_buf[37]; unsigned long id_len;
+                                std::vector<char> f_id_buf(2048); unsigned long f_id_len;
+                                char ct_buf[256]; unsigned long ct_len; bool ct_null;
+                                std::vector<char> dest_buf(2048); unsigned long dest_len;
+                                char created_buf[30]; unsigned long created_len;
+                                
+                                MYSQL_BIND res_bind[5]; memset(res_bind, 0, sizeof(res_bind));
+                                res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
+                                res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
+                                res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = ct_buf; res_bind[2].buffer_length = sizeof(ct_buf); res_bind[2].length = &ct_len; res_bind[2].is_null = (char*)&ct_null;
+                                res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = dest_buf.data(); res_bind[3].buffer_length = dest_buf.size(); res_bind[3].length = &dest_len;
+                                res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = created_buf; res_bind[4].buffer_length = sizeof(created_buf); res_bind[4].length = &created_len;
+                                
+                                if (stmt.bind_result(res_bind) && stmt.fetch() == 0) {
                                     std::string oldest_created(created_buf, created_len);
                                     double elapsed_ms = 0;
-                                    const char* time_query = "SELECT (UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP(?)) * 1000";
-                                    MYSQL_STMT* t_stmt = mysql_stmt_init(conn);
-                                    if (t_stmt) {
-                                        if (!mysql_stmt_prepare(t_stmt, time_query, strlen(time_query))) {
-                                            MYSQL_BIND t_bind[1]; memset(t_bind, 0, sizeof(t_bind));
-                                            t_bind[0].buffer_type = MYSQL_TYPE_STRING; t_bind[0].buffer = (char*)oldest_created.c_str(); t_bind[0].buffer_length = oldest_created.length();
-                                            mysql_stmt_bind_param(t_stmt, t_bind); mysql_stmt_execute(t_stmt);
-                                            MYSQL_BIND tr_bind[1]; memset(tr_bind, 0, sizeof(tr_bind));
-                                            tr_bind[0].buffer_type = MYSQL_TYPE_DOUBLE; tr_bind[0].buffer = &elapsed_ms;
-                                            mysql_stmt_bind_result(t_stmt, tr_bind); mysql_stmt_fetch(t_stmt);
+                                    utils::StatementWrapper t_stmt(conn);
+                                    if (t_stmt.prepare("SELECT (UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP(?)) * 1000")) {
+                                        MYSQL_BIND t_bind[1]; memset(t_bind, 0, sizeof(t_bind));
+                                        t_stmt.bind_string_param(0, oldest_created, t_bind);
+                                        if (t_stmt.bind_params(t_bind) && t_stmt.execute() && t_stmt.store_result()) {
+                                            MYSQL_BIND r_bind[1]; memset(r_bind, 0, sizeof(r_bind));
+                                            r_bind[0].buffer_type = MYSQL_TYPE_DOUBLE; r_bind[0].buffer = &elapsed_ms;
+                                            if (t_stmt.bind_result(r_bind)) t_stmt.fetch();
                                         }
-                                        mysql_stmt_close(t_stmt);
                                     }
 
                                     if (elapsed_ms >= b.wait_ms) {
-                                        tasks_to_do.push_back({std::string(id_buf, id_len), std::string(f_id_buf.data(), f_id_len), std::string(dest_buf.data(), dest_len)});
-                                        std::vector<std::string> ids_to_mark = {tasks_to_do.back().id};
-                                        while (!mysql_stmt_fetch(stmt)) {
-                                            tasks_to_do.push_back({std::string(id_buf, id_len), std::string(f_id_buf.data(), f_id_len), std::string(dest_buf.data(), dest_len)});
-                                            ids_to_mark.push_back(tasks_to_do.back().id);
-                                        }
+                                        std::vector<std::string> ids_to_mark;
+                                        do {
+                                            tasks_to_do.push_back({std::string(id_buf, id_len), std::string(f_id_buf.data(), f_id_len), ct_null ? "" : std::string(ct_buf, ct_len), std::string(dest_buf.data(), dest_len)});
+                                            ids_to_mark.push_back(std::string(id_buf, id_len));
+                                        } while (stmt.fetch() == 0);
 
-                                        std::string mark_query = "UPDATE tasks SET status = 'processing' WHERE id IN (";
-                                        for (size_t i = 0; i < ids_to_mark.size(); ++i) mark_query += (i == 0 ? "?" : ",?");
-                                        mark_query += ")";
-                                        MYSQL_STMT* m_stmt = mysql_stmt_init(conn);
-                                        if (m_stmt) {
-                                            if (!mysql_stmt_prepare(m_stmt, mark_query.c_str(), mark_query.length())) {
-                                                std::vector<MYSQL_BIND> m_binds(ids_to_mark.size()); memset(m_binds.data(), 0, m_binds.size() * sizeof(MYSQL_BIND));
-                                                for (size_t i = 0; i < ids_to_mark.size(); ++i) {
-                                                    m_binds[i].buffer_type = MYSQL_TYPE_STRING; m_binds[i].buffer = (char*)ids_to_mark[i].c_str(); m_binds[i].buffer_length = ids_to_mark[i].length();
+                                        if (!ids_to_mark.empty() && !stop_flag_) {
+                                            for (const auto& task_id : ids_to_mark) {
+                                                utils::StatementWrapper u_stmt(conn);
+                                                if (u_stmt.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?")) {
+                                                    MYSQL_BIND u_bind[1]; memset(u_bind, 0, sizeof(u_bind));
+                                                    u_stmt.bind_string_param(0, task_id, u_bind);
+                                                    u_stmt.bind_params(u_bind); u_stmt.execute();
                                                 }
-                                                mysql_stmt_bind_param(m_stmt, m_binds.data()); mysql_stmt_execute(m_stmt);
                                             }
-                                            mysql_stmt_close(m_stmt);
                                         }
                                     }
                                 }
                             }
-                            mysql_stmt_close(stmt);
                         }
                     }
 
-                    if (!tasks_to_do.empty()) {
-                        std::thread([this, tasks_to_do, b_id = b.id]() {
+                    if (!tasks_to_do.empty() && !stop_flag_) {
+                        std::lock_guard<std::mutex> t_lock(thread_mutex_);
+                        monitor_threads_.emplace_back([this, tasks_to_do, b_id = b.id]() mutable {
+                            mysql_thread_init();
                             MYSQL* t_conn = DatabaseService::get_instance().get_connection();
                             int max_retries = 3; long long max_bytes = 0; long long inter_task_delay_ms = 5000;
+                            json opts;
                             {
                                 std::lock_guard<std::mutex> lock(db_mutex_);
-                                const char* opt_query = "SELECT options FROM batches WHERE id = ?";
-                                MYSQL_STMT* stmt = mysql_stmt_init(t_conn);
-                                if (stmt) {
-                                    if (!mysql_stmt_prepare(stmt, opt_query, strlen(opt_query))) {
-                                        MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                        bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)b_id.c_str(); bind[0].buffer_length = b_id.length();
-                                        mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
-                                        std::vector<char> opt_buf(65536); unsigned long opt_len = 0;
+                                utils::StatementWrapper stmt(t_conn);
+                                if (stmt.prepare("SELECT options FROM batches WHERE id = ?")) {
+                                    MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+                                    stmt.bind_string_param(0, b_id, bind);
+                                    if (stmt.bind_params(bind) && stmt.execute() && stmt.store_result()) {
+                                        std::vector<char> opt_buf(65536); unsigned long opt_len;
                                         MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
                                         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = opt_buf.data(); res_bind[0].buffer_length = opt_buf.size(); res_bind[0].length = &opt_len;
-                                        mysql_stmt_bind_result(stmt, res_bind);
-                                        if (!mysql_stmt_fetch(stmt)) {
-                                            try {
-                                                json opts = json::parse(std::string(opt_buf.data(), opt_len));
-                                                max_retries = opts.value("max_retries", 3);
-                                                max_bytes = utils::parse_size_string(opts.value("max_batch_storage", "0"));
-                                                inter_task_delay_ms = parse_duration_ms(opts.value("wait_duration", "5s")).count();
-                                            } catch (...) {}
+                                        if (stmt.bind_result(res_bind) && !stmt.fetch()) {
+                                            opts = parse_batch_options(std::string(opt_buf.data(), opt_len));
+                                            max_retries = opts.value("max_retries", 3);
+                                            max_bytes = utils::parse_size_string(opts.value("max_batch_storage", "0"));
+                                            inter_task_delay_ms = utils::parse_duration_ms(opts.value("wait_duration", "5s")).count();
                                         }
                                     }
-                                    mysql_stmt_close(stmt);
                                 }
                             }
 
                             for (size_t i = 0; i < tasks_to_do.size(); ++i) {
-                                const auto& t = tasks_to_do[i];
+                                if (stop_flag_) break;
+                                auto t = tasks_to_do[i];
                                 {
                                     std::lock_guard<std::mutex> lock(db_mutex_);
-                                    const char* update_status_query = "UPDATE tasks SET status = 'downloading' WHERE id = ?";
-                                    MYSQL_STMT* stmt = mysql_stmt_init(t_conn);
-                                    if (stmt) {
-                                        if (!mysql_stmt_prepare(stmt, update_status_query, strlen(update_status_query))) {
-                                            MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                            bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)t.id.c_str(); bind[0].buffer_length = t.id.length();
-                                            mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
-                                        }
-                                        mysql_stmt_close(stmt);
+                                    utils::StatementWrapper stmt(t_conn);
+                                    if (stmt.prepare("UPDATE tasks SET status = 'downloading' WHERE id = ?")) {
+                                        MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+                                        stmt.bind_string_param(0, t.id, bind);
+                                        stmt.bind_params(bind); stmt.execute();
                                     }
                                 }
                                 
                                 bool success = false; int attempts = 0;
-                                while (attempts <= max_retries) {
+                                std::string detected_ct = "";
+                                while (attempts <= max_retries && !stop_flag_) {
                                     long long allowed_bytes = max_bytes;
                                     if (max_bytes > 0) {
                                         long long current_batch_size = 0;
                                         {
                                             std::lock_guard<std::mutex> lock(db_mutex_);
-                                            const char* size_query = "SELECT SUM(m.file_size) FROM media_metadata m JOIN tasks t ON m.task_id = t.id WHERE t.batch_id = ?";
-                                            MYSQL_STMT* stmt = mysql_stmt_init(t_conn);
-                                            if (stmt) {
-                                                if (!mysql_stmt_prepare(stmt, size_query, strlen(size_query))) {
-                                                    MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                                    bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)b_id.c_str(); bind[0].buffer_length = b_id.length();
-                                                    mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
+                                            utils::StatementWrapper stmt(t_conn);
+                                            if (stmt.prepare("SELECT SUM(m.file_size) FROM media_metadata m JOIN tasks t ON m.task_id = t.id WHERE t.batch_id = ?")) {
+                                                MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+                                                stmt.bind_string_param(0, b_id, bind);
+                                                if (stmt.bind_params(bind) && stmt.execute() && stmt.store_result()) {
                                                     MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
                                                     res_bind[0].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[0].buffer = &current_batch_size;
-                                                    mysql_stmt_bind_result(stmt, res_bind); mysql_stmt_fetch(stmt);
+                                                    stmt.bind_result(res_bind); stmt.fetch();
                                                 }
-                                                mysql_stmt_close(stmt);
                                             }
                                         }
                                         allowed_bytes = max_bytes - current_batch_size;
@@ -477,141 +444,135 @@ void BatchManager::start_monitors() {
                                     }
 
                                     DownloadResult dl_res = DownloadService::download_file(t.file_id, t.dest, allowed_bytes);
-                                    if (dl_res.success) { success = true; break; }
+                                    if (dl_res.success) {
+                                        detected_ct = utils::detect_content_type(t.dest);
+                                        if (detected_ct.empty()) {
+                                            std::filesystem::remove(t.dest);
+                                            CROW_LOG_ERROR << "Download rejected for task " << t.id << ": Unknown magic bytes";
+                                            success = false;
+                                            break;
+                                        }
+
+                                        std::vector<std::string> allowed_ct = opts.value("allowed_content_types", std::vector<std::string>{});
+                                        if (!allowed_ct.empty()) {
+                                            bool is_allowed = false;
+                                            for (const auto& act : allowed_ct) { if (act == detected_ct) { is_allowed = true; break; } }
+                                            if (!is_allowed) {
+                                                std::filesystem::remove(t.dest);
+                                                CROW_LOG_ERROR << "Download rejected for task " << t.id << ": Content-type '" << detected_ct << "' not allowed";
+                                                success = false;
+                                                break;
+                                            }
+                                        }
+
+                                        t.content_type = detected_ct;
+                                        success = true;
+                                        break;
+                                    }
                                     attempts++;
-                                    if (attempts <= max_retries) {
+                                    if (attempts <= max_retries && !stop_flag_) {
                                         int wait_time = dl_res.rate_limited ? dl_res.retry_after_seconds : 2;
                                         std::this_thread::sleep_for(std::chrono::seconds(wait_time));
                                     }
                                 }
 
                                 std::string final_status = success ? "success" : "failed";
-                                std::string local_url_str = success ? "file://" + t.dest : "";
                                 {
                                     std::lock_guard<std::mutex> lock(db_mutex_);
-                                    const char* update_query = "UPDATE tasks SET status = ?, local_url = ? WHERE id = ?";
-                                    MYSQL_STMT* stmt = mysql_stmt_init(t_conn);
-                                    if (stmt) {
-                                        if (!mysql_stmt_prepare(stmt, update_query, strlen(update_query))) {
-                                            MYSQL_BIND bind[3]; memset(bind, 0, sizeof(bind));
-                                            bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)final_status.c_str(); bind[0].buffer_length = final_status.length();
-                                            bind[1].buffer_type = MYSQL_TYPE_STRING; bind[1].buffer = (char*)local_url_str.c_str(); bind[1].buffer_length = local_url_str.length();
-                                            bind[2].buffer_type = MYSQL_TYPE_STRING; bind[2].buffer = (char*)t.id.c_str(); bind[2].buffer_length = t.id.length();
-                                            mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
-                                        }
-                                        mysql_stmt_close(stmt);
+                                    utils::StatementWrapper stmt(t_conn);
+                                    if (stmt.prepare("UPDATE tasks SET status = ?, local_url = ?, content_type = ? WHERE id = ?")) {
+                                        MYSQL_BIND bind[4]; memset(bind, 0, sizeof(bind));
+                                        std::string local_url_str = success ? "file://" + t.dest : "";
+                                        stmt.bind_string_param(0, final_status, bind);
+                                        stmt.bind_string_param(1, local_url_str, bind);
+                                        stmt.bind_string_param(2, t.content_type, bind);
+                                        stmt.bind_string_param(3, t.id, bind);
+                                        stmt.bind_params(bind); stmt.execute();
                                     }
                                 }
 
-                                if (success) {
-                                    int res_val = 512;
-                                    {
-                                        std::lock_guard<std::mutex> lock(db_mutex_);
-                                        const char* res_query = "SELECT options FROM batches WHERE id = ?";
-                                        MYSQL_STMT* stmt = mysql_stmt_init(t_conn);
-                                        if (stmt) {
-                                            if (!mysql_stmt_prepare(stmt, res_query, strlen(res_query))) {
-                                                MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)b_id.c_str(); bind[0].buffer_length = b_id.length();
-                                                mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
-                                                std::vector<char> opt_buf(65536); unsigned long opt_len;
-                                                MYSQL_BIND r_bind[1]; memset(r_bind, 0, sizeof(r_bind));
-                                                r_bind[0].buffer_type = MYSQL_TYPE_STRING; r_bind[0].buffer = opt_buf.data(); r_bind[0].buffer_length = opt_buf.size(); r_bind[0].length = &opt_len;
-                                                mysql_stmt_bind_result(stmt, r_bind);
-                                                if (!mysql_stmt_fetch(stmt)) {
-                                                    try { json opts = json::parse(std::string(opt_buf.data(), opt_len)); res_val = opts.value("waveform_resolution", 512); } catch (...) {}
-                                                }
-                                            }
-                                            mysql_stmt_close(stmt);
-                                        }
-                                    }
-
+                                if (success && !stop_flag_) {
+                                    int res_val = opts.value("waveform_resolution", 512);
                                     MediaResult m_res = MediaService::extract_waveform(t.dest, res_val);
                                     if (m_res.success) {
                                         std::lock_guard<std::mutex> lock(db_mutex_);
-                                        const char* meta_query = "INSERT INTO media_metadata (task_id, file_size, format, duration_seconds) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE file_size=VALUES(file_size), format=VALUES(format), duration_seconds=VALUES(duration_seconds)";
-                                        MYSQL_STMT* m_stmt = mysql_stmt_init(t_conn);
-                                        if (m_stmt) {
-                                            if (!mysql_stmt_prepare(m_stmt, meta_query, strlen(meta_query))) {
-                                                MYSQL_BIND bind[4]; memset(bind, 0, sizeof(bind));
-                                                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)t.id.c_str(); bind[0].buffer_length = t.id.length();
-                                                bind[1].buffer_type = MYSQL_TYPE_LONGLONG; bind[1].buffer = &m_res.file_size;
-                                                bind[2].buffer_type = MYSQL_TYPE_STRING; bind[2].buffer = (char*)m_res.format.c_str(); bind[2].buffer_length = m_res.format.length();
-                                                bind[3].buffer_type = MYSQL_TYPE_FLOAT; bind[3].buffer = &m_res.duration_seconds;
-                                                mysql_stmt_bind_param(m_stmt, bind); mysql_stmt_execute(m_stmt);
-                                            }
-                                            mysql_stmt_close(m_stmt);
+                                        utils::StatementWrapper m_stmt(t_conn);
+                                        if (m_stmt.prepare("INSERT INTO media_metadata (task_id, file_size, format, duration_seconds) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE file_size=VALUES(file_size), format=VALUES(format), duration_seconds=VALUES(duration_seconds)")) {
+                                            MYSQL_BIND m_bind[4]; memset(m_bind, 0, sizeof(m_bind));
+                                            m_stmt.bind_string_param(0, t.id, m_bind);
+                                            m_stmt.bind_long_param(1, &m_res.file_size, m_bind);
+                                            m_stmt.bind_string_param(2, m_res.format, m_bind);
+                                            m_stmt.bind_float_param(3, &m_res.duration_seconds, m_bind);
+                                            m_stmt.bind_params(m_bind); m_stmt.execute();
                                         }
 
-                                        std::string wave_str = json(m_res.waveform_data).dump();
-                                        const char* wave_query = "INSERT INTO waveforms (task_id, waveform_data, waveform_peaks_binary, resolution) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE waveform_data=VALUES(waveform_data), waveform_peaks_binary=VALUES(waveform_peaks_binary), resolution=VALUES(resolution)";
-                                        MYSQL_STMT* w_stmt = mysql_stmt_init(t_conn);
-                                        if (w_stmt) {
-                                            if (!mysql_stmt_prepare(w_stmt, wave_query, strlen(wave_query))) {
-                                                MYSQL_BIND bind[4]; memset(bind, 0, sizeof(bind));
-                                                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)t.id.c_str(); bind[0].buffer_length = t.id.length();
-                                                bind[1].buffer_type = MYSQL_TYPE_BLOB; bind[1].buffer = (char*)wave_str.c_str(); bind[1].buffer_length = wave_str.length();
-                                                
-                                                size_t binary_size = m_res.waveform_peaks.size() * sizeof(services::WaveformPointInt16);
-                                                bind[2].buffer_type = MYSQL_TYPE_BLOB; bind[2].buffer = (char*)m_res.waveform_peaks.data(); bind[2].buffer_length = binary_size;
-                                                
-                                                bind[3].buffer_type = MYSQL_TYPE_LONG; bind[3].buffer = &res_val;
-                                                mysql_stmt_bind_param(w_stmt, bind); mysql_stmt_execute(w_stmt);
-                                            }
-                                            mysql_stmt_close(w_stmt);
+                                        const char* wave_query = "INSERT INTO waveforms (task_id, waveform_peaks_binary, resolution) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE waveform_peaks_binary=VALUES(waveform_peaks_binary), resolution=VALUES(resolution)";
+                                        utils::StatementWrapper w_stmt(t_conn);
+                                        if (w_stmt.isValid() && w_stmt.prepare(wave_query)) {
+                                            MYSQL_BIND bind[3]; memset(bind, 0, sizeof(bind));
+                                            w_stmt.bind_string_param(0, t.id, bind);
+                                            size_t binary_size = m_res.waveform_peaks.size() * sizeof(services::WaveformPointInt16);
+                                            w_stmt.bind_blob_param(1, m_res.waveform_peaks.data(), (unsigned long)binary_size, bind);
+                                            w_stmt.bind_int_param(2, &res_val, bind);
+                                            w_stmt.bind_params(bind); w_stmt.execute();
                                         }
                                     }
                                 }
-                                if (i < tasks_to_do.size() - 1) std::this_thread::sleep_for(std::chrono::milliseconds(inter_task_delay_ms));
+                                if (i < tasks_to_do.size() - 1 && !stop_flag_) {
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(inter_task_delay_ms));
+                                }
                             }
-                        }).detach();
+                            mysql_thread_end();
+                        });
                     }
                 }
             }
-        }).detach();
+            mysql_thread_end();
+        });
 
         // Cleanup Monitor
-        std::thread([this]() {
-            while (true) {
-                std::this_thread::sleep_for(std::chrono::seconds(60));
+        monitor_threads_.emplace_back([this]() {
+            mysql_thread_init();
+            CROW_LOG_INFO << "Cleanup Monitor started.";
+            while (!stop_flag_) {
+                {
+                    std::unique_lock<std::mutex> lock(cv_mutex_);
+                    task_cv_.wait_for(lock, std::chrono::seconds(60), [this] { return stop_flag_.load(); });
+                }
+                if (stop_flag_) break;
+
                 MYSQL* conn = DatabaseService::get_instance().get_connection();
                 std::vector<std::string> to_delete;
                 {
                     std::lock_guard<std::mutex> lock(db_mutex_);
-                    const char* cleanup_query = "SELECT id FROM batches WHERE status = 'completed' AND delete_at IS NOT NULL AND delete_at <= NOW()";
-                    MYSQL_STMT* stmt = mysql_stmt_init(conn);
-                    if (stmt) {
-                        if (!mysql_stmt_prepare(stmt, cleanup_query, strlen(cleanup_query))) {
-                            mysql_stmt_execute(stmt); mysql_stmt_store_result(stmt);
-                            char id_buf[37]; unsigned long id_len = 0;
-                            MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
-                            res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
-                            mysql_stmt_bind_result(stmt, res_bind);
-                            while (!mysql_stmt_fetch(stmt)) to_delete.push_back(std::string(id_buf, id_len));
+                    utils::StatementWrapper stmt(conn);
+                    if (stmt.prepare("SELECT id FROM batches WHERE status = 'completed' AND delete_at IS NOT NULL AND delete_at <= NOW()") && stmt.execute() && stmt.store_result()) {
+                        char id_buf[37]; unsigned long id_len;
+                        MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
+                        res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
+                        if (stmt.bind_result(res_bind)) {
+                            while (stmt.fetch() == 0) to_delete.push_back(std::string(id_buf, id_len));
                         }
-                        mysql_stmt_close(stmt);
                     }
                 }
 
                 for (const auto& b_id : to_delete) {
+                    if (stop_flag_) break;
                     std::filesystem::path base_dir = storage_dir_;
                     try {
                         if (std::filesystem::exists(base_dir / b_id)) std::filesystem::remove_all(base_dir / b_id);
                         std::lock_guard<std::mutex> lock(db_mutex_);
-                        const char* update_query = "UPDATE batches SET status = 'deleted', delete_at = NULL WHERE id = ?";
-                        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-                        if (stmt) {
-                            if (!mysql_stmt_prepare(stmt, update_query, strlen(update_query))) {
-                                MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)b_id.c_str(); bind[0].buffer_length = b_id.length();
-                                mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
-                            }
-                            mysql_stmt_close(stmt);
+                        utils::StatementWrapper stmt(conn);
+                        if (stmt.prepare("UPDATE batches SET status = 'deleted', delete_at = NULL WHERE id = ?")) {
+                            MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+                            stmt.bind_string_param(0, b_id, bind);
+                            stmt.bind_params(bind); stmt.execute();
                         }
                     } catch (...) {}
                 }
             }
-        }).detach();
+            mysql_thread_end();
+        });
     });
 }
 
@@ -621,42 +582,37 @@ bool BatchManager::complete_batch(const std::string& batch_id) {
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* check_query = "SELECT options FROM batches WHERE id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (stmt) {
-            if (!mysql_stmt_prepare(stmt, check_query, strlen(check_query))) {
-                MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)batch_id.c_str(); bind[0].buffer_length = batch_id.length();
-                mysql_stmt_bind_param(stmt, bind); mysql_stmt_execute(stmt);
+        utils::StatementWrapper stmt(conn);
+        if (stmt.isValid() && stmt.prepare(check_query)) {
+            MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+            stmt.bind_string_param(0, batch_id, bind);
+            if (stmt.bind_params(bind) && stmt.execute()) {
                 std::vector<char> opt_buf(65536); unsigned long opt_len;
                 MYSQL_BIND res_bind[1]; memset(res_bind, 0, sizeof(res_bind));
                 res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = opt_buf.data(); res_bind[0].buffer_length = opt_buf.size(); res_bind[0].length = &opt_len;
-                mysql_stmt_bind_result(stmt, res_bind);
-                if (!mysql_stmt_fetch(stmt)) {
-                    try { json opts = json::parse(std::string(opt_buf.data(), opt_len)); delete_after_seconds = parse_duration(opts.value("delete_after", "0s")).count(); } catch (...) {}
+                if (stmt.bind_result(res_bind) && !stmt.fetch()) {
+                    json opts = parse_batch_options(std::string(opt_buf.data(), opt_len));
+                    delete_after_seconds = utils::parse_duration_s(opts.value("delete_after", "0s")).count();
                 }
             }
-            mysql_stmt_close(stmt);
         }
     }
 
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* query = (delete_after_seconds > 0) ? "UPDATE batches SET status = 'completed', delete_at = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE id = ? AND status = 'awaiting'" : "UPDATE batches SET status = 'completed' WHERE id = ? AND status = 'awaiting'";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) return false;
-        if (!mysql_stmt_prepare(stmt, query, strlen(query))) {
-            MYSQL_BIND bind[2]; memset(bind, 0, sizeof(bind));
-            if (delete_after_seconds > 0) {
-                bind[0].buffer_type = MYSQL_TYPE_LONGLONG; bind[0].buffer = &delete_after_seconds;
-                bind[1].buffer_type = MYSQL_TYPE_STRING; bind[1].buffer = (char*)batch_id.c_str(); bind[1].buffer_length = batch_id.length();
-            } else {
-                bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)batch_id.c_str(); bind[0].buffer_length = batch_id.length();
-            }
-            mysql_stmt_bind_param(stmt, bind);
-            mysql_stmt_execute(stmt);
-            if (mysql_stmt_affected_rows(stmt) == 0) { mysql_stmt_close(stmt); return false; }
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(query)) return false;
+        
+        MYSQL_BIND bind[2]; memset(bind, 0, sizeof(bind));
+        if (delete_after_seconds > 0) {
+            stmt.bind_long_param(0, &delete_after_seconds, bind);
+            stmt.bind_string_param(1, batch_id, bind);
+        } else {
+            stmt.bind_string_param(0, batch_id, bind);
         }
-        mysql_stmt_close(stmt);
+        if (!stmt.bind_params(bind) || !stmt.execute()) return false;
+        if (stmt.affected_rows() == 0) return false;
     }
     return true;
 }
@@ -667,30 +623,16 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* query = "SELECT status, options FROM batches WHERE id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) {
-            CROW_LOG_ERROR << "mysql_stmt_init() failed in get_batch";
-            return std::nullopt;
-        }
-
-        if (mysql_stmt_prepare(stmt, query, strlen(query))) {
-            CROW_LOG_ERROR << "mysql_stmt_prepare() failed in get_batch: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(query)) return std::nullopt;
 
         MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-        bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)batch_id.c_str(); bind[0].buffer_length = batch_id.length();
+        stmt.bind_string_param(0, batch_id, bind);
         
-        if (mysql_stmt_bind_param(stmt, bind) || mysql_stmt_execute(stmt) || mysql_stmt_store_result(stmt)) {
-            CROW_LOG_ERROR << "Execution or store_result failed in get_batch: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return std::nullopt;
 
-        if (mysql_stmt_num_rows(stmt) == 0) {
+        if (stmt.num_rows() == 0) {
             CROW_LOG_WARNING << "Batch not found: " << batch_id;
-            mysql_stmt_close(stmt);
             return std::nullopt;
         }
 
@@ -698,52 +640,42 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
         MYSQL_BIND res_bind[2]; memset(res_bind, 0, sizeof(res_bind));
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = status_buf; res_bind[0].buffer_length = sizeof(status_buf); res_bind[0].length = &status_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = opt_buf.data(); res_bind[1].buffer_length = opt_buf.size(); res_bind[1].length = &opt_len;
-        mysql_stmt_bind_result(stmt, res_bind);
-        if (mysql_stmt_fetch(stmt)) {
-            CROW_LOG_ERROR << "Fetch failed in get_batch: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        if (!stmt.bind_result(res_bind) || stmt.fetch()) return std::nullopt;
         
         b.status = std::string(status_buf, status_len);
-        try {
-            json opts = json::parse(std::string(opt_buf.data(), opt_len));
-            b.options.wait_duration = opts.value("wait_duration", "5s"); b.options.max_retries = opts.value("max_retries", 0);
-            b.options.max_batch_size = opts.value("max_batch_size", 0); b.options.max_batch_storage = opts.value("max_batch_storage", "");
-            b.options.allowed_services = opts.value("allowed_services", std::vector<std::string>{}); b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
-        } catch (const std::exception& e) {
-            CROW_LOG_WARNING << "JSON parse failed for batch options: " << e.what();
-        }
-        mysql_stmt_close(stmt);
+        json opts = parse_batch_options(std::string(opt_buf.data(), opt_len));
+        b.options.wait_duration = opts.value("wait_duration", "5s"); b.options.max_retries = opts.value("max_retries", 0);
+        b.options.max_batch_size = opts.value("max_batch_size", 0); b.options.max_batch_storage = opts.value("max_batch_storage", "");
+        b.options.allowed_services = opts.value("allowed_services", std::vector<std::string>{});
+        b.options.allowed_content_types = opts.value("allowed_content_types", std::vector<std::string>{});
+        b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
 
-        const char* task_query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.batch_id = ?";
-        stmt = mysql_stmt_init(conn);
-        if (stmt && !mysql_stmt_prepare(stmt, task_query, strlen(task_query))) {
-            mysql_stmt_bind_param(stmt, bind);
-            if (!mysql_stmt_execute(stmt) && !mysql_stmt_store_result(stmt)) {
-                MYSQL_BIND res_bind_tasks[11]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
-                char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char t_s_buf[21]; unsigned long t_s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
+        const char* task_query = "SELECT id, file_id, content_type, status FROM tasks WHERE batch_id = ?";
+        utils::StatementWrapper t_stmt(conn);
+        if (t_stmt.isValid() && t_stmt.prepare(task_query)) {
+            if (t_stmt.bind_params(bind) && t_stmt.execute() && t_stmt.store_result()) {
+                MYSQL_BIND res_bind_tasks[4]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
+                char id_buf[37]; unsigned long id_len = 0;
+                std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
+                std::vector<char> ct_buf(255); unsigned long ct_len = 0; bool ct_null = false;
+                char t_s_buf[21]; unsigned long t_s_len = 0;
+                
                 res_bind_tasks[0].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[0].buffer = id_buf; res_bind_tasks[0].buffer_length = sizeof(id_buf); res_bind_tasks[0].length = &id_len;
                 res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = f_id_buf.data(); res_bind_tasks[1].buffer_length = f_id_buf.size(); res_bind_tasks[1].length = &f_id_len;
-                res_bind_tasks[2].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[2].buffer = dest_buf.data(); res_bind_tasks[2].buffer_length = dest_buf.size(); res_bind_tasks[2].length = &dest_len;
+                res_bind_tasks[2].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[2].buffer = ct_buf.data(); res_bind_tasks[2].buffer_length = ct_buf.size(); res_bind_tasks[2].length = &ct_len; res_bind_tasks[2].is_null = (char*)&ct_null;
                 res_bind_tasks[3].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[3].buffer = t_s_buf; res_bind_tasks[3].buffer_length = sizeof(t_s_buf); res_bind_tasks[3].length = &t_s_len;
-                res_bind_tasks[4].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[4].buffer = url_buf.data(); res_bind_tasks[4].buffer_length = url_buf.size(); res_bind_tasks[4].length = &url_len; res_bind_tasks[4].is_null = (char*)&url_null;
-                res_bind_tasks[5].buffer_type = MYSQL_TYPE_LONGLONG; res_bind_tasks[5].buffer = &f_size; res_bind_tasks[5].is_null = (char*)&f_size_null;
-                res_bind_tasks[6].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[6].buffer = format_buf; res_bind_tasks[6].buffer_length = sizeof(format_buf); res_bind_tasks[6].length = &format_len; res_bind_tasks[6].is_null = (char*)&format_null;
-                res_bind_tasks[7].buffer_type = MYSQL_TYPE_FLOAT; res_bind_tasks[7].buffer = &dur; res_bind_tasks[7].is_null = (char*)&dur_null;
-                res_bind_tasks[8].buffer_type = MYSQL_TYPE_BLOB; res_bind_tasks[8].buffer = w_buf.data(); res_bind_tasks[8].buffer_length = w_buf.size(); res_bind_tasks[8].length = &w_len; res_bind_tasks[8].is_null = (char*)&w_null;
-                res_bind_tasks[9].buffer_type = MYSQL_TYPE_BLOB; res_bind_tasks[9].buffer = w_peaks_buf.data(); res_bind_tasks[9].buffer_length = w_peaks_buf.size(); res_bind_tasks[9].length = &w_peaks_len; res_bind_tasks[9].is_null = (char*)&w_peaks_null;
-                res_bind_tasks[10].buffer_type = MYSQL_TYPE_LONG; res_bind_tasks[10].buffer = &res_val; res_bind_tasks[10].is_null = (char*)&res_null;
-                mysql_stmt_bind_result(stmt, res_bind_tasks);
-                while (!mysql_stmt_fetch(stmt)) {
-                    models::Task t; t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(t_s_buf, t_s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
-                    if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
-                    if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
-                    if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); }
-                    b.tasks.push_back(t);
+                
+                if (t_stmt.bind_result(res_bind_tasks)) {
+                    while (!t_stmt.fetch()) {
+                        models::Task t;
+                        t.id = std::string(id_buf, id_len);
+                        t.file_id = std::string(f_id_buf.data(), f_id_len);
+                        t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len);
+                        t.status = std::string(t_s_buf, t_s_len);
+                        b.tasks.push_back(t);
+                    }
                 }
             }
-            mysql_stmt_close(stmt);
         }
     }
     return b;
@@ -754,58 +686,42 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
     models::Task t;
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        const char* query = "SELECT t.id, t.file_id, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_data, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
-        MYSQL_STMT* stmt = mysql_stmt_init(conn);
-        if (!stmt) {
-            CROW_LOG_ERROR << "mysql_stmt_init() failed in get_ingested_task";
-            return std::nullopt;
-        }
-        if (mysql_stmt_prepare(stmt, query, strlen(query))) {
-            CROW_LOG_ERROR << "mysql_stmt_prepare() failed in get_ingested_task: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        const char* query = "SELECT t.id, t.file_id, t.content_type, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
+        utils::StatementWrapper stmt(conn);
+        if (!stmt.isValid() || !stmt.prepare(query)) return std::nullopt;
 
         MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
-        bind[0].buffer_type = MYSQL_TYPE_STRING; bind[0].buffer = (char*)task_id.c_str(); bind[0].buffer_length = task_id.length();
+        stmt.bind_string_param(0, task_id, bind);
         
-        if (mysql_stmt_bind_param(stmt, bind) || mysql_stmt_execute(stmt) || mysql_stmt_store_result(stmt)) {
-            CROW_LOG_ERROR << "Execution or store_result failed in get_ingested_task: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        if (!stmt.bind_params(bind) || !stmt.execute() || !stmt.store_result()) return std::nullopt;
 
-        if (mysql_stmt_num_rows(stmt) == 0) {
+        if (stmt.num_rows() == 0) {
             CROW_LOG_WARNING << "Task not found in DB: " << task_id;
-            mysql_stmt_close(stmt);
             return std::nullopt;
         }
 
         MYSQL_BIND res_bind[11]; memset(res_bind, 0, sizeof(res_bind));
-        char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0; std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_buf(1024*1024); unsigned long w_len = 0; bool w_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
+        char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
+        std::vector<char> ct_buf(255); unsigned long ct_len = 0; bool ct_null = false;
+        std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
+        
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
-        res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = dest_buf.data(); res_bind[2].buffer_length = dest_buf.size(); res_bind[2].length = &dest_len;
-        res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = s_buf; res_bind[3].buffer_length = sizeof(s_buf); res_bind[3].length = &s_len;
-        res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = url_buf.data(); res_bind[4].buffer_length = url_buf.size(); res_bind[4].length = &url_len; res_bind[4].is_null = (char*)&url_null;
-        res_bind[5].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[5].buffer = &f_size; res_bind[5].is_null = (char*)&f_size_null;
-        res_bind[6].buffer_type = MYSQL_TYPE_STRING; res_bind[6].buffer = format_buf; res_bind[6].buffer_length = sizeof(format_buf); res_bind[6].length = &format_len; res_bind[6].is_null = (char*)&format_null;
-        res_bind[7].buffer_type = MYSQL_TYPE_FLOAT; res_bind[7].buffer = &dur; res_bind[7].is_null = (char*)&dur_null;
-        res_bind[8].buffer_type = MYSQL_TYPE_BLOB; res_bind[8].buffer = w_buf.data(); res_bind[8].buffer_length = w_buf.size(); res_bind[8].length = &w_len; res_bind[8].is_null = (char*)&w_null;
+        res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = ct_buf.data(); res_bind[2].buffer_length = ct_buf.size(); res_bind[2].length = &ct_len; res_bind[2].is_null = (char*)&ct_null;
+        res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = dest_buf.data(); res_bind[3].buffer_length = dest_buf.size(); res_bind[3].length = &dest_len;
+        res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = s_buf; res_bind[4].buffer_length = sizeof(s_buf); res_bind[4].length = &s_len;
+        res_bind[5].buffer_type = MYSQL_TYPE_STRING; res_bind[5].buffer = url_buf.data(); res_bind[5].buffer_length = url_buf.size(); res_bind[5].length = &url_len; res_bind[5].is_null = (char*)&url_null;
+        res_bind[6].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[6].buffer = &f_size; res_bind[6].is_null = (char*)&f_size_null;
+        res_bind[7].buffer_type = MYSQL_TYPE_STRING; res_bind[7].buffer = format_buf; res_bind[7].buffer_length = sizeof(format_buf); res_bind[7].length = &format_len; res_bind[7].is_null = (char*)&format_null;
+        res_bind[8].buffer_type = MYSQL_TYPE_FLOAT; res_bind[8].buffer = &dur; res_bind[8].is_null = (char*)&dur_null;
         res_bind[9].buffer_type = MYSQL_TYPE_BLOB; res_bind[9].buffer = w_peaks_buf.data(); res_bind[9].buffer_length = w_peaks_buf.size(); res_bind[9].length = &w_peaks_len; res_bind[9].is_null = (char*)&w_peaks_null;
         res_bind[10].buffer_type = MYSQL_TYPE_LONG; res_bind[10].buffer = &res_val; res_bind[10].is_null = (char*)&res_null;
-        mysql_stmt_bind_result(stmt, res_bind);
-        if (mysql_stmt_fetch(stmt)) {
-            CROW_LOG_ERROR << "Fetch failed in get_ingested_task: " << mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
-            return std::nullopt;
-        }
+        
+        if (!stmt.bind_result(res_bind) || stmt.fetch()) return std::nullopt;
 
-        t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
+        t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
         if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
-        if (!w_null) { try { t.waveform = json::parse(std::string(w_buf.data(), w_len)).get<std::vector<float>>(); t.waveform_resolution = res_null ? 0 : res_val; } catch (...) {} }
-        if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); }
-        mysql_stmt_close(stmt);
+        if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); t.waveform_resolution = res_null ? 0 : res_val; }
     }
     return t;
 }

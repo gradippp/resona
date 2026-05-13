@@ -2,6 +2,7 @@
 #include "../models/batch.h"
 #include "../services/batch_manager.h"
 #include "../utils/response.h"
+#include "../utils/path_utils.h"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -13,43 +14,48 @@ namespace batch {
         auto& manager = services::BatchManager::get_instance();
 
         // POST /v1/batch - Create a Batch
-        CROW_ROUTE(app, "/v1/batch").methods(crow::HTTPMethod::POST)([&manager](const crow::request& req) {
+        CROW_ROUTE(app, "/v1/batch").methods(crow::HTTPMethod::POST)([&manager](const crow::request& req, crow::response& res) {
+            auto body = utils::parse_json_or_error(req, res);
+            if (body.is_null()) return;
+
+            if (!body.contains("delete_after") || body["delete_after"].get<std::string>().empty()) {
+                utils::send_error(res, "'delete_after' is a required field and cannot be empty", 400);
+                return;
+            }
+
             try {
-                auto body = nlohmann::json::parse(req.body);
-
-                if (!body.contains("delete_after") || body["delete_after"].get<std::string>().empty()) {
-                    return utils::error_response("'delete_after' is a required field and cannot be empty", 400);
-                }
-
                 auto create_options = body.get<models::CreateBatchRequest>();
-
                 std::string batch_id = manager.create_batch(create_options);
 
                 nlohmann::json response;
                 response["batch_id"] = batch_id;
                 response["status"] = "pending";
 
-                return utils::json_response(response);
+                res = utils::json_response(response);
+                res.end();
             } catch (const std::exception& e) {
-                return utils::error_response("Invalid JSON or missing fields: " + std::string(e.what()));
+                utils::send_error(res, "Missing or invalid fields: " + std::string(e.what()));
             }
         });
 
         // POST /v1/batch/{batch_id} - Add a Download Task
-        CROW_ROUTE(app, "/v1/batch/<string>").methods(crow::HTTPMethod::POST)([&manager](const crow::request& req, std::string batch_id) {
+        CROW_ROUTE(app, "/v1/batch/<string>").methods(crow::HTTPMethod::POST)([&manager](const crow::request& req, crow::response& res, std::string batch_id) {
+            auto body = utils::parse_json_or_error(req, res);
+            if (body.is_null()) return;
+
             try {
-                auto body = nlohmann::json::parse(req.body);
                 auto task_req = body.get<models::AddTaskRequest>();
 
                 if (manager.add_task(batch_id, task_req)) {
                     nlohmann::json response;
                     response["message"] = "Task queued in batch " + batch_id;
-                    return utils::json_response(response, 202);
+                    res = utils::json_response(response, 202);
                 } else {
-                    return utils::error_response("Batch not found or already started", 404);
+                    res = utils::error_response("Batch not found or already started", 404);
                 }
+                res.end();
             } catch (const std::exception& e) {
-                return utils::error_response("Invalid JSON: " + std::string(e.what()));
+                utils::send_error(res, "Invalid Task format: " + std::string(e.what()));
             }
         });
 
@@ -102,62 +108,61 @@ namespace batch {
             }
 
             std::string path = task->destination_path;
+            
+            // SECURITY: Prevent path traversal and ensure the file is within the storage directory
+            if (!utils::is_path_safe(path, manager.get_storage_directory())) {
+                CROW_LOG_ERROR << "SECURITY: Blocked path traversal attempt for task " << task_id << ": " << path;
+                return utils::error_response("Invalid file path", 403);
+            }
+
             if (!std::filesystem::exists(path)) {
                 CROW_LOG_ERROR << "Streaming failed: File not found at " << path;
                 return utils::error_response("File not found on disk", 404);
             }
 
+            size_t file_size = std::filesystem::file_size(path);
             crow::response res;
+            res.set_header("Accept-Ranges", "bytes");
+            
             std::string range_header = req.get_header_value("Range");
             if (range_header.empty()) {
                 res.set_static_file_info_unsafe(path);
-                res.add_header("Accept-Ranges", "bytes");
                 return res;
-                }
-            // Simple range parsing: "bytes=start-end"
-            size_t file_size = std::filesystem::file_size(path);
-            size_t start = 0, end = file_size - 1;
+            }
 
-            try {
-                std::string prefix = "bytes=";
-                if (range_header.substr(0, prefix.size()) == prefix) {
-                    std::string range = range_header.substr(prefix.size());
-                    size_t dash_pos = range.find('-');
-                    if (dash_pos != std::string::npos) {
-                        std::string s_start = range.substr(0, dash_pos);
-                        std::string s_end = range.substr(dash_pos + 1);
-                        if (!s_start.empty()) start = std::stoull(s_start);
-                        if (!s_end.empty()) end = std::stoull(s_end);
-                    }
-                }
-            } catch (...) {
+            utils::HttpRange range;
+            if (!utils::parse_range_header(range_header, file_size, range)) {
                 CROW_LOG_WARNING << "Streaming failed: Invalid Range header: " << range_header;
                 return utils::error_response("Invalid Range header", 400);
             }
 
-            if (start >= file_size || end >= file_size || start > end) {
+            if (range.start >= file_size || (range.has_end && range.end >= file_size) || (range.has_end && range.start > range.end)) {
                 CROW_LOG_WARNING << "Streaming failed: Range not satisfiable: " << range_header << " (size: " << file_size << ")";
                 res.code = 416;
-                res.add_header("Content-Range", "bytes */" + std::to_string(file_size));
+                res.set_header("Content-Range", "bytes */" + std::to_string(file_size));
                 return res;
             }
 
-            size_t length = end - start + 1;
+            size_t end = range.has_end ? range.end : (file_size - 1);
+            size_t length = end - range.start + 1;
+            
             std::ifstream file(path, std::ios::binary);
-            file.seekg(start);
+            file.seekg(range.start);
 
             std::string buffer(length, '\0');
             file.read(&buffer[0], length);
 
             res.code = 206;
             res.body = std::move(buffer);
-            res.add_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(file_size));
-            res.add_header("Content-Length", std::to_string(length));
-            res.add_header("Accept-Ranges", "bytes");
+            res.set_header("Content-Range", "bytes " + std::to_string(range.start) + "-" + std::to_string(end) + "/" + std::to_string(file_size));
+            res.set_header("Content-Length", std::to_string(length));
 
-            std::size_t last_dot = path.find_last_of('.');
-            if (last_dot != std::string::npos) {
-                res.add_header("Content-Type", crow::response::get_mime_type(path.substr(last_dot + 1)));
+            if (!task->content_type.empty()) {
+                res.set_header("Content-Type", task->content_type);
+            } else {
+                std::string ext = std::filesystem::path(path).extension().string();
+                if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+                res.set_header("Content-Type", crow::response::get_mime_type(ext));
             }
 
             return res;
