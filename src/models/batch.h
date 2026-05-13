@@ -51,6 +51,12 @@ struct TaskMetadata {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TaskMetadata, file_size, format, duration_seconds)
 
+struct TaskSummary {
+    std::string id;
+    std::string status;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TaskSummary, id, status)
+
 struct Task {
     std::string id;
     std::string file_id;
@@ -62,7 +68,7 @@ struct Task {
     std::string waveform_peaks_b64 = "";
     int waveform_resolution = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, content_type, destination_path, status, local_url, metadata, waveform_peaks_b64, waveform_resolution)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, status, local_url, metadata, waveform_peaks_b64, waveform_resolution)
 
 struct WaveformPointInt16 {
     int16_t minPeak;
@@ -73,7 +79,7 @@ struct Batch {
     std::string id;
     std::string status = "pending"; // pending, processing, completed
     CreateBatchRequest options;
-    std::vector<Task> tasks;
+    std::vector<TaskSummary> tasks;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Batch, id, status, options, tasks)
 

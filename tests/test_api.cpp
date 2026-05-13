@@ -81,6 +81,13 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         REQUIRE(status_json1["status"] == "awaiting");
         REQUIRE(status_json1["tasks"].size() == 1);
         REQUIRE(status_json1["tasks"][0]["status"] == "success");
+        
+        // VERIFY SIMPLIFICATION: Task in batch response should only have id and status
+        REQUIRE(status_json1["tasks"][0].size() == 2);
+        REQUIRE(status_json1["tasks"][0].contains("id"));
+        REQUIRE(status_json1["tasks"][0].contains("status"));
+        REQUIRE_FALSE(status_json1["tasks"][0].contains("file_id"));
+        REQUIRE_FALSE(status_json1["tasks"][0].contains("destination_path"));
 
         // 5. Add second Task
         auto add_res2 = cpr::Post(
@@ -114,6 +121,8 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         REQUIRE(ingested_json["id"] == task_id);
         REQUIRE(ingested_json.contains("metadata"));
+        REQUIRE_FALSE(ingested_json.contains("destination_path"));
+        REQUIRE_FALSE(ingested_json.contains("content_type"));
         // waveform_resolution will be 0 here because it's not a real media file
 
         // 8. Test /v1/ingested/{task_id}/stream

@@ -650,27 +650,21 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
         b.options.allowed_content_types = opts.value("allowed_content_types", std::vector<std::string>{});
         b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
 
-        const char* task_query = "SELECT id, file_id, content_type, status FROM tasks WHERE batch_id = ?";
+        const char* task_query = "SELECT id, status FROM tasks WHERE batch_id = ?";
         utils::StatementWrapper t_stmt(conn);
         if (t_stmt.isValid() && t_stmt.prepare(task_query)) {
             if (t_stmt.bind_params(bind) && t_stmt.execute() && t_stmt.store_result()) {
-                MYSQL_BIND res_bind_tasks[4]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
+                MYSQL_BIND res_bind_tasks[2]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
                 char id_buf[37]; unsigned long id_len = 0;
-                std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
-                std::vector<char> ct_buf(255); unsigned long ct_len = 0; bool ct_null = false;
                 char t_s_buf[21]; unsigned long t_s_len = 0;
                 
                 res_bind_tasks[0].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[0].buffer = id_buf; res_bind_tasks[0].buffer_length = sizeof(id_buf); res_bind_tasks[0].length = &id_len;
-                res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = f_id_buf.data(); res_bind_tasks[1].buffer_length = f_id_buf.size(); res_bind_tasks[1].length = &f_id_len;
-                res_bind_tasks[2].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[2].buffer = ct_buf.data(); res_bind_tasks[2].buffer_length = ct_buf.size(); res_bind_tasks[2].length = &ct_len; res_bind_tasks[2].is_null = (char*)&ct_null;
-                res_bind_tasks[3].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[3].buffer = t_s_buf; res_bind_tasks[3].buffer_length = sizeof(t_s_buf); res_bind_tasks[3].length = &t_s_len;
+                res_bind_tasks[1].buffer_type = MYSQL_TYPE_STRING; res_bind_tasks[1].buffer = t_s_buf; res_bind_tasks[1].buffer_length = sizeof(t_s_buf); res_bind_tasks[1].length = &t_s_len;
                 
                 if (t_stmt.bind_result(res_bind_tasks)) {
                     while (!t_stmt.fetch()) {
-                        models::Task t;
+                        models::TaskSummary t;
                         t.id = std::string(id_buf, id_len);
-                        t.file_id = std::string(f_id_buf.data(), f_id_len);
-                        t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len);
                         t.status = std::string(t_s_buf, t_s_len);
                         b.tasks.push_back(t);
                     }
