@@ -75,7 +75,7 @@ Resona is designed to operate as a specialized worker microservice within a larg
 ### Built-in Constraints
 While global limits are deferred, Resona enforces the following per-batch constraints to protect the immediate environment:
 - **Batch Size Limit**: Each batch is limited to a maximum number of files (default: 50).
-- **Storage Quota**: Batches enforce a total cumulative file size limit (default: 1GB) during the download phase to prevent runaway storage consumption.
+- **Storage Quota**: Batches enforce a total cumulative file size limit (default: 5GB) during the download phase to prevent runaway storage consumption.
 
 ## License
 This project is licensed under the **MIT License**. See the [LICENSE](./LICENSE) file for details.
