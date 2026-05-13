@@ -7,6 +7,7 @@ add_executable(resona-tests
     test_api.cpp
     test_size_parser.cpp
     test_media_service.cpp
+    test_time_utils.cpp
 )
 target_link_libraries(resona-tests
     PRIVATE

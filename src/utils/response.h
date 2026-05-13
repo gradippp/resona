@@ -74,4 +74,17 @@ inline void send_error(crow::response& res, const std::string& detail, int statu
     res.end();
 }
 
+/**
+ * Parses JSON from a request body or returns a 400 Bad Request error.
+ * Returns a null json object if parsing fails.
+ */
+inline nlohmann::json parse_json_or_error(const crow::request& req, crow::response& res) {
+    try {
+        return nlohmann::json::parse(req.body);
+    } catch (const std::exception& e) {
+        send_error(res, "Invalid JSON: " + std::string(e.what()), 400);
+        return nullptr;
+    }
+}
+
 } // namespace utils

@@ -1,4 +1,5 @@
 #include "download_service.h"
+#include "../utils/time_utils.h"
 #include <cpr/cpr.h>
 #include <fstream>
 #include <iostream>
@@ -10,32 +11,7 @@
 #include <algorithm>
 #include "crow/logging.h"
 
-#ifdef _WIN32
-#define timegm _mkgmtime
-#endif
-
 namespace services {
-
-static int parse_retry_after(const std::string& retry_after) {
-    if (retry_after.empty()) return 60;
-
-    if (std::all_of(retry_after.begin(), retry_after.end(), [](unsigned char c) { return std::isdigit(c); })) {
-        try {
-            return std::stoi(retry_after);
-        } catch (...) {
-            return 60;
-        }
-    }
-
-    std::tm tm = {};
-    std::istringstream ss(retry_after);
-    ss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
-    if (ss.fail()) return 60;
-
-    time_t target_time = timegm(&tm);
-    time_t now = time(nullptr);
-    return (std::max)(0, (int)difftime(target_time, now));
-}
 
 DownloadResult DownloadService::download_file(const std::string& url, const std::string& destination, long long max_bytes) {
     DownloadResult res;
@@ -84,7 +60,7 @@ DownloadResult DownloadService::download_file(const std::string& url, const std:
 
     if (r.status_code == 429 || r.status_code == 503) {
         res.rate_limited = true;
-        res.retry_after_seconds = parse_retry_after(r.header["Retry-After"]);
+        res.retry_after_seconds = utils::parse_http_date_to_seconds(r.header["Retry-After"]);
         res.error_message = "Rate limited or service unavailable (HTTP " + std::to_string(r.status_code) + ")";
         CROW_LOG_WARNING << res.error_message << ". Retrying after " << res.retry_after_seconds << "s";
         std::filesystem::remove(destination);

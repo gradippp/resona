@@ -15,7 +15,6 @@ struct MediaResult {
     long long file_size = 0;
     std::string format = "";
     float duration_seconds = 0.0f;
-    std::vector<float> waveform_data;
     std::vector<WaveformPointInt16> waveform_peaks;
     std::string error_message = "";
 };
