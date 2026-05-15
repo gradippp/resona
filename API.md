@@ -54,7 +54,7 @@ Retrieve the current version and description of the service.
 ```json
 {
   "description": "Resona",
-  "version": "0.7.0"
+  "version": "0.9.0"
 }
 ```
 
