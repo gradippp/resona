@@ -89,6 +89,7 @@ Initialize a new ingestion batch.
 | `allowed_services` | array | [] | List of permitted providers: `["GOOGLE_DRIVE", "DROPBOX", "DIRECT"]`. Empty = All allowed. |
 | `allowed_content_types` | array | [] | List of permitted MIME types (e.g., `["audio/mpeg", "audio/wav"]`). Empty = All allowed. |
 | `waveform_resolution`| int | 4096 | Number of window pairs (min/max) to extract per audio file. |
+| `transcode_formats` | array | [] | List of target formats to transcode to (e.g., `["mp3", "ogg"]`). |
 
 **Response (200 OK):**
 ```json
@@ -222,7 +223,14 @@ Direct lookup of a successfully ingested file by its unique Task UUID.
   "id": "task-uuid",
   "file_id": "https://...",
   "status": "success",
-  "local_url": "file:///...",
+  "local_urls": [
+    { "url": "file:///...", "content_type": "audio/wav" },
+    { "url": "file:///...", "content_type": "audio/mpeg" }
+  ],
+  "stream_urls": [
+    { "url": "/v1/ingested/{task_id}/stream", "content_type": "audio/wav" },
+    { "url": "/v1/ingested/{task_id}/stream?format=mp3", "content_type": "audio/mpeg" }
+  ],
   "metadata": {
     "file_size": 1048576,
     "format": "WAV",
@@ -244,6 +252,9 @@ Stream a successfully ingested media file. This endpoint is optimized for audio 
 
 **Request:**
 `GET /v1/ingested/{task_id}/stream`
+
+**Query Parameters:**
+- `format`: (Optional) The target extension to stream (e.g., `mp3`, `ogg`). If omitted, the original downloaded file is streamed.
 
 **Headers:**
 - `Range`: (Optional) Standard HTTP range header (e.g., `bytes=0-1024` or `bytes=2048-`).

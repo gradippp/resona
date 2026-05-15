@@ -65,6 +65,51 @@ add_subdirectory(third_party/cpr)
 add_subdirectory(third_party/crow)
 add_subdirectory(third_party/catch2)
 
+# FFmpeg integration
+set(FFMPEG_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg_install")
+set(FFMPEG_CONFIGURE_FLAGS
+    --prefix=${FFMPEG_INSTALL_DIR}
+    --disable-x86asm 
+    --disable-programs 
+    --disable-doc 
+    --enable-static 
+    --disable-shared 
+    --enable-pic
+    --disable-encoders
+    --disable-decoders
+    --enable-encoder=pcm_s16le
+    --enable-decoder=mp3,vorbis,pcm_s16le,flac
+    --disable-network
+)
+
+if(WIN32)
+    list(APPEND FFMPEG_CONFIGURE_FLAGS --toolchain=msvc)
+    set(FFMPEG_CONFIGURE_COMMAND sh <SOURCE_DIR>/configure ${FFMPEG_CONFIGURE_FLAGS})
+    set(FFMPEG_BUILD_COMMAND sh -c "make -j4")
+    set(FFMPEG_INSTALL_COMMAND sh -c "make install")
+    set(SYS_LIBS zlib)
+else()
+    set(FFMPEG_CONFIGURE_COMMAND <SOURCE_DIR>/configure ${FFMPEG_CONFIGURE_FLAGS})
+    set(FFMPEG_BUILD_COMMAND make -j4)
+    set(FFMPEG_INSTALL_COMMAND make install)
+    set(SYS_LIBS z m)
+endif()
+
+include(ExternalProject)
+ExternalProject_Add(ffmpeg_project
+    SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg_src"
+    CONFIGURE_COMMAND ${FFMPEG_CONFIGURE_COMMAND}
+    BUILD_COMMAND     ${FFMPEG_BUILD_COMMAND}
+    INSTALL_COMMAND   ${FFMPEG_INSTALL_COMMAND}
+)
+
+set(FFMPEG_LIBRARIES
+    "${FFMPEG_INSTALL_DIR}/lib/libavformat.a"
+    "${FFMPEG_INSTALL_DIR}/lib/libavcodec.a"
+    "${FFMPEG_INSTALL_DIR}/lib/libavutil.a"
+    "${FFMPEG_INSTALL_DIR}/lib/libswresample.a"
+)
+
 # Core library (logic shared between main app and tests)
 add_library(resona-core STATIC
     src/routes/routes.cpp
@@ -78,11 +123,14 @@ add_library(resona-core STATIC
     src/utils/size_parser.cpp
 )
 
+add_dependencies(resona-core ffmpeg_project)
+
 target_include_directories(resona-core PUBLIC 
     "${PROJECT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mariadb-connector-c/include"
     "${PROJECT_BINARY_DIR}/third_party/mariadb-connector-c/include"
+    "${FFMPEG_INSTALL_DIR}/include"
 )
 
 target_link_libraries(resona-core PUBLIC 
@@ -90,6 +138,8 @@ target_link_libraries(resona-core PUBLIC
     nlohmann_json::nlohmann_json 
     cpr
     libmariadb
+    ${FFMPEG_LIBRARIES}
+    ${SYS_LIBS}
 )
 
 # Main executable

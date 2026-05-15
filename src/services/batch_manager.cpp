@@ -74,6 +74,7 @@ json BatchManager::parse_batch_options(const std::string& options_str) {
     ensure_default("allowed_content_types", json::array());
     ensure_default("delete_after", "24H");
     ensure_default("waveform_resolution", 4096);
+    ensure_default("transcode_formats", json::array());
     
     return opts;
 }
@@ -90,7 +91,8 @@ std::string BatchManager::create_batch(const models::CreateBatchRequest& req) {
         {"allowed_services", req.allowed_services},
         {"allowed_content_types", req.allowed_content_types},
         {"delete_after", req.delete_after},
-        {"waveform_resolution", req.waveform_resolution}
+        {"waveform_resolution", req.waveform_resolution},
+        {"transcode_formats", req.transcode_formats}
     };
 
     std::string options_str = options.dump();
@@ -516,6 +518,32 @@ void BatchManager::start_monitors() {
                                             w_stmt.bind_int_param(2, &res_val, bind);
                                             w_stmt.bind_params(bind); w_stmt.execute();
                                         }
+
+                                        // 3. Perform Transcoding
+                                        std::vector<std::string> trans_formats = opts.value("transcode_formats", std::vector<std::string>{});
+                                        if (!trans_formats.empty()) {
+                                            std::vector<std::string> successful_transcodes;
+                                            std::filesystem::path base_dest = std::filesystem::path(t.dest).parent_path();
+                                            for (const auto& fmt : trans_formats) {
+                                                if (stop_flag_) break;
+                                                std::string out_path = (base_dest / (t.id + "." + fmt)).string();
+                                                if (MediaService::transcode_audio(t.dest, out_path, fmt)) {
+                                                    successful_transcodes.push_back(fmt);
+                                                }
+                                            }
+                                            
+                                            if (!successful_transcodes.empty()) {
+                                                std::lock_guard<std::mutex> lock(db_mutex_);
+                                                utils::StatementWrapper t_stmt(t_conn);
+                                                if (t_stmt.prepare("UPDATE tasks SET transcoded_formats = ? WHERE id = ?")) {
+                                                    MYSQL_BIND t_bind[2]; memset(t_bind, 0, sizeof(t_bind));
+                                                    std::string trans_json = json(successful_transcodes).dump();
+                                                    t_stmt.bind_string_param(0, trans_json, t_bind);
+                                                    t_stmt.bind_string_param(1, t.id, t_bind);
+                                                    t_stmt.bind_params(t_bind); t_stmt.execute();
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 if (i < tasks_to_do.size() - 1 && !stop_flag_) {
@@ -680,7 +708,7 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
     models::Task t;
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        const char* query = "SELECT t.id, t.file_id, t.content_type, t.destination_path, t.status, t.local_url, m.file_size, m.format, m.duration_seconds, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
+        const char* query = "SELECT t.id, t.file_id, t.content_type, t.destination_path, t.status, t.local_url, t.transcoded_formats, m.file_size, m.format, m.duration_seconds, w.waveform_peaks_binary, w.resolution FROM tasks t LEFT JOIN media_metadata m ON t.id = m.task_id LEFT JOIN waveforms w ON t.id = w.task_id WHERE t.id = ?";
         utils::StatementWrapper stmt(conn);
         if (!stmt.isValid() || !stmt.prepare(query)) return std::nullopt;
 
@@ -694,10 +722,13 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
             return std::nullopt;
         }
 
-        MYSQL_BIND res_bind[11]; memset(res_bind, 0, sizeof(res_bind));
+        MYSQL_BIND res_bind[12]; memset(res_bind, 0, sizeof(res_bind));
         char id_buf[37]; unsigned long id_len = 0; std::vector<char> f_id_buf(2048); unsigned long f_id_len = 0;
         std::vector<char> ct_buf(255); unsigned long ct_len = 0; bool ct_null = false;
-        std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false; long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
+        std::vector<char> dest_buf(2048); unsigned long dest_len = 0; char s_buf[21]; unsigned long s_len = 0; 
+        std::vector<char> url_buf(2048); unsigned long url_len = 0; bool url_null = false;
+        std::vector<char> trans_buf(65536); unsigned long trans_len = 0; bool trans_null = false;
+        long long f_size = 0; bool f_size_null = false; char format_buf[11]; unsigned long format_len = 0; bool format_null = false; float dur = 0; bool dur_null = false; std::vector<char> w_peaks_buf(1024*1024); unsigned long w_peaks_len = 0; bool w_peaks_null = false; int res_val = 0; bool res_null = false;
         
         res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
         res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
@@ -705,15 +736,42 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
         res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = dest_buf.data(); res_bind[3].buffer_length = dest_buf.size(); res_bind[3].length = &dest_len;
         res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = s_buf; res_bind[4].buffer_length = sizeof(s_buf); res_bind[4].length = &s_len;
         res_bind[5].buffer_type = MYSQL_TYPE_STRING; res_bind[5].buffer = url_buf.data(); res_bind[5].buffer_length = url_buf.size(); res_bind[5].length = &url_len; res_bind[5].is_null = (char*)&url_null;
-        res_bind[6].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[6].buffer = &f_size; res_bind[6].is_null = (char*)&f_size_null;
-        res_bind[7].buffer_type = MYSQL_TYPE_STRING; res_bind[7].buffer = format_buf; res_bind[7].buffer_length = sizeof(format_buf); res_bind[7].length = &format_len; res_bind[7].is_null = (char*)&format_null;
-        res_bind[8].buffer_type = MYSQL_TYPE_FLOAT; res_bind[8].buffer = &dur; res_bind[8].is_null = (char*)&dur_null;
-        res_bind[9].buffer_type = MYSQL_TYPE_BLOB; res_bind[9].buffer = w_peaks_buf.data(); res_bind[9].buffer_length = w_peaks_buf.size(); res_bind[9].length = &w_peaks_len; res_bind[9].is_null = (char*)&w_peaks_null;
-        res_bind[10].buffer_type = MYSQL_TYPE_LONG; res_bind[10].buffer = &res_val; res_bind[10].is_null = (char*)&res_null;
+        res_bind[6].buffer_type = MYSQL_TYPE_STRING; res_bind[6].buffer = trans_buf.data(); res_bind[6].buffer_length = trans_buf.size(); res_bind[6].length = &trans_len; res_bind[6].is_null = (char*)&trans_null;
+        res_bind[7].buffer_type = MYSQL_TYPE_LONGLONG; res_bind[7].buffer = &f_size; res_bind[7].is_null = (char*)&f_size_null;
+        res_bind[8].buffer_type = MYSQL_TYPE_STRING; res_bind[8].buffer = format_buf; res_bind[8].buffer_length = sizeof(format_buf); res_bind[8].length = &format_len; res_bind[8].is_null = (char*)&format_null;
+        res_bind[9].buffer_type = MYSQL_TYPE_FLOAT; res_bind[9].buffer = &dur; res_bind[9].is_null = (char*)&dur_null;
+        res_bind[10].buffer_type = MYSQL_TYPE_BLOB; res_bind[10].buffer = w_peaks_buf.data(); res_bind[10].buffer_length = w_peaks_buf.size(); res_bind[10].length = &w_peaks_len; res_bind[10].is_null = (char*)&w_peaks_null;
+        res_bind[11].buffer_type = MYSQL_TYPE_LONG; res_bind[11].buffer = &res_val; res_bind[11].is_null = (char*)&res_null;
         
         if (!stmt.bind_result(res_bind) || stmt.fetch()) return std::nullopt;
 
-        t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len); t.local_url = url_null ? "" : std::string(url_buf.data(), url_len);
+        t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len);
+        
+        // Populate local_urls and stream_urls
+        if (!url_null) {
+            t.local_urls.push_back({std::string(url_buf.data(), url_len), t.content_type});
+            t.stream_urls.push_back({"/v1/ingested/" + t.id + "/stream", t.content_type});
+        }
+        
+        if (!trans_null) {
+            try {
+                json transcoded = json::parse(std::string(trans_buf.data(), trans_len));
+                if (transcoded.is_array()) {
+                    std::filesystem::path base_dest = std::filesystem::path(t.destination_path).parent_path();
+                    for (const auto& format : transcoded) {
+                        std::string fmt = format.get<std::string>();
+                        std::string trans_dest = (base_dest / (t.id + "." + fmt)).string();
+                        std::string ct = "audio/" + fmt; // Simplified, could be improved
+                        if (fmt == "mp3") ct = "audio/mpeg";
+                        else if (fmt == "ogg") ct = "audio/ogg";
+                        
+                        t.local_urls.push_back({"file://" + trans_dest, ct});
+                        t.stream_urls.push_back({"/v1/ingested/" + t.id + "/stream?format=" + fmt, ct});
+                    }
+                }
+            } catch (...) {}
+        }
+
         if (!f_size_null) { models::TaskMetadata m; m.file_size = f_size; m.format = format_null ? "" : std::string(format_buf, format_len); m.duration_seconds = dur_null ? 0 : dur; t.metadata = m; }
         if (!w_peaks_null) { t.waveform_peaks_b64 = utils::base64_encode((const unsigned char*)w_peaks_buf.data(), w_peaks_len); t.waveform_resolution = res_null ? 0 : res_val; }
     }

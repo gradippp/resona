@@ -153,6 +153,9 @@ void DatabaseService::initialize_schema() {
         {2, {
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS content_type VARCHAR(255) NULL",
             "ALTER TABLE waveforms ADD COLUMN IF NOT EXISTS waveform_peaks_binary LONGBLOB"
+        }},
+        {3, {
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS transcoded_formats JSON NULL"
         }}
     };
 
