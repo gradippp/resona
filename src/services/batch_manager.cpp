@@ -747,10 +747,9 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
 
         t.id = std::string(id_buf, id_len); t.file_id = std::string(f_id_buf.data(), f_id_len); t.content_type = ct_null ? "" : std::string(ct_buf.data(), ct_len); t.destination_path = std::string(dest_buf.data(), dest_len); t.status = std::string(s_buf, s_len);
         
-        // Populate local_urls and stream_urls
+        // Populate url
         if (!url_null) {
-            t.local_urls.push_back({std::string(url_buf.data(), url_len), t.content_type});
-            t.stream_urls.push_back({"/v1/ingested/" + t.id + "/stream", t.content_type});
+            t.url.push_back({"/v1/ingested/" + t.id + "/stream", std::string(url_buf.data(), url_len), t.content_type});
         }
         
         if (!trans_null) {
@@ -765,8 +764,7 @@ std::optional<models::Task> BatchManager::get_ingested_task(const std::string& t
                         if (fmt == "mp3") ct = "audio/mpeg";
                         else if (fmt == "ogg") ct = "audio/ogg";
                         
-                        t.local_urls.push_back({"file://" + trans_dest, ct});
-                        t.stream_urls.push_back({"/v1/ingested/" + t.id + "/stream?format=" + fmt, ct});
+                        t.url.push_back({"/v1/ingested/" + t.id + "/stream?format=" + fmt, "file://" + trans_dest, ct});
                     }
                 }
             } catch (...) {}

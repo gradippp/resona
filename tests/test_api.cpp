@@ -132,10 +132,10 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         REQUIRE(ingested_json["id"] == task_id);
         REQUIRE(ingested_json.contains("metadata"));
-        REQUIRE(ingested_json.contains("local_urls"));
-        REQUIRE(ingested_json.contains("stream_urls"));
-        REQUIRE(ingested_json["local_urls"].is_array());
-        REQUIRE(ingested_json["stream_urls"].is_array());
+        REQUIRE(ingested_json.contains("url"));
+        REQUIRE(ingested_json["url"].is_array());
+        REQUIRE_FALSE(ingested_json.contains("local_urls"));
+        REQUIRE_FALSE(ingested_json.contains("stream_urls"));
         REQUIRE_FALSE(ingested_json.contains("destination_path"));
         REQUIRE_FALSE(ingested_json.contains("content_type"));
         REQUIRE_FALSE(ingested_json.contains("local_url"));

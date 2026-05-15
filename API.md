@@ -223,13 +223,17 @@ Direct lookup of a successfully ingested file by its unique Task UUID.
   "id": "task-uuid",
   "file_id": "https://...",
   "status": "success",
-  "local_urls": [
-    { "url": "file:///...", "content_type": "audio/wav" },
-    { "url": "file:///...", "content_type": "audio/mpeg" }
-  ],
-  "stream_urls": [
-    { "url": "/v1/ingested/{task_id}/stream", "content_type": "audio/wav" },
-    { "url": "/v1/ingested/{task_id}/stream?format=mp3", "content_type": "audio/mpeg" }
+  "url": [
+    { 
+      "stream_url": "/v1/ingested/{task_id}/stream", 
+      "local_url": "file:///...", 
+      "content_type": "audio/wav" 
+    },
+    { 
+      "stream_url": "/v1/ingested/{task_id}/stream?format=mp3", 
+      "local_url": "file:///...", 
+      "content_type": "audio/mpeg" 
+    }
   ],
   "metadata": {
     "file_size": 1048576,

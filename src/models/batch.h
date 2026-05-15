@@ -59,10 +59,11 @@ struct TaskSummary {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TaskSummary, id, status)
 
 struct MediaUrl {
-    std::string url;
+    std::string stream_url;
+    std::string local_url;
     std::string content_type;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MediaUrl, url, content_type)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MediaUrl, stream_url, local_url, content_type)
 
 struct Task {
     std::string id;
@@ -70,13 +71,12 @@ struct Task {
     std::string content_type = "";
     std::string destination_path;
     std::string status = "pending"; // pending, processing, downloading, success, failed
-    std::vector<MediaUrl> local_urls;
-    std::vector<MediaUrl> stream_urls;
+    std::vector<MediaUrl> url;
     std::optional<TaskMetadata> metadata;
     std::string waveform_peaks_b64 = "";
     int waveform_resolution = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, status, local_urls, stream_urls, metadata, waveform_peaks_b64, waveform_resolution)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, status, url, metadata, waveform_peaks_b64, waveform_resolution)
 
 struct WaveformPointInt16 {
     int16_t minPeak;
