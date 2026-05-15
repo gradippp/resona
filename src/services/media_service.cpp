@@ -10,6 +10,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/opt.h>
+#include <libavutil/audio_fifo.h>
 #include <libswresample/swresample.h>
 }
 
@@ -58,8 +59,10 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
     AVCodecContext* dec_ctx = nullptr;
     AVCodecContext* enc_ctx = nullptr;
     SwrContext* resample_ctx = nullptr;
+    AVAudioFifo* fifo = nullptr;
     int audio_stream_index = -1;
     bool success = false;
+    int64_t pts = 0;
 
     CROW_LOG_INFO << "Transcoding " << input_filepath << " to " << target_format << " (" << output_filepath << ")";
 
@@ -140,9 +143,10 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
 
         AVStream* out_stream = avformat_new_stream(ofmt_ctx, nullptr);
         avcodec_parameters_from_context(out_stream->codecpar, enc_ctx);
+        out_stream->time_base = enc_ctx->time_base;
     }
 
-    // 4. Setup Resampler
+    // 4. Setup Resampler and FIFO
     {
         if (swr_alloc_set_opts2(&resample_ctx,
                 &enc_ctx->ch_layout, enc_ctx->sample_fmt, enc_ctx->sample_rate,
@@ -151,10 +155,16 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
             CROW_LOG_ERROR << "Failed to allocate resampler context";
             goto cleanup;
         }
-    }
-    if (!resample_ctx || swr_init(resample_ctx) < 0) {
-        CROW_LOG_ERROR << "Failed to initialize resampler";
-        goto cleanup;
+        if (swr_init(resample_ctx) < 0) {
+            CROW_LOG_ERROR << "Failed to initialize resampler";
+            goto cleanup;
+        }
+
+        fifo = av_audio_fifo_alloc(enc_ctx->sample_fmt, enc_ctx->ch_layout.nb_channels, 1);
+        if (!fifo) {
+            CROW_LOG_ERROR << "Failed to allocate FIFO";
+            goto cleanup;
+        }
     }
 
     // 5. Open output file
@@ -178,6 +188,36 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
         AVPacket* out_packet = av_packet_alloc();
         int ret;
 
+        auto encode_from_fifo = [&]() -> bool {
+            int frame_size = enc_ctx->frame_size ? enc_ctx->frame_size : 1024;
+            while (av_audio_fifo_size(fifo) >= frame_size || (success && av_audio_fifo_size(fifo) > 0)) {
+                int current_frame_size = std::min(av_audio_fifo_size(fifo), frame_size);
+                
+                enc_frame->nb_samples = current_frame_size;
+                enc_frame->format = enc_ctx->sample_fmt;
+                av_channel_layout_copy(&enc_frame->ch_layout, &enc_ctx->ch_layout);
+                enc_frame->sample_rate = enc_ctx->sample_rate;
+                
+                if (av_frame_get_buffer(enc_frame, 0) < 0) return false;
+                if (av_audio_fifo_read(fifo, (void**)enc_frame->data, current_frame_size) < current_frame_size) return false;
+
+                enc_frame->pts = pts;
+                pts += current_frame_size;
+
+                if (avcodec_send_frame(enc_ctx, enc_frame) >= 0) {
+                    while (avcodec_receive_packet(enc_ctx, out_packet) >= 0) {
+                        av_packet_rescale_ts(out_packet, enc_ctx->time_base, ofmt_ctx->streams[0]->time_base);
+                        out_packet->stream_index = 0;
+                        av_interleaved_write_frame(ofmt_ctx, out_packet);
+                        av_packet_unref(out_packet);
+                    }
+                }
+                av_frame_unref(enc_frame);
+                if (success && av_audio_fifo_size(fifo) == 0) break;
+            }
+            return true;
+        };
+
         while (av_read_frame(ifmt_ctx, packet) >= 0) {
             if (packet->stream_index == audio_stream_index) {
                 ret = avcodec_send_packet(dec_ctx, packet);
@@ -186,33 +226,52 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
                     else if (ret < 0) goto loop_cleanup;
 
-                    // Resample / Convert format
-                    enc_frame->nb_samples = enc_ctx->frame_size ? enc_ctx->frame_size : frame->nb_samples;
-                    enc_frame->format = enc_ctx->sample_fmt;
-                    av_channel_layout_copy(&enc_frame->ch_layout, &enc_ctx->ch_layout);
-                    enc_frame->sample_rate = enc_ctx->sample_rate;
-                    av_frame_get_buffer(enc_frame, 0);
+                    // Resample
+                    int max_dst_nb_samples = swr_get_out_samples(resample_ctx, frame->nb_samples);
+                    uint8_t** dst_data = nullptr;
+                    int dst_linesize;
+                    if (av_samples_alloc_array_and_samples(&dst_data, &dst_linesize, enc_ctx->ch_layout.nb_channels, max_dst_nb_samples, enc_ctx->sample_fmt, 0) < 0) goto loop_cleanup;
 
-                    swr_convert(resample_ctx, enc_frame->data, enc_frame->nb_samples,
-                                (const uint8_t**)frame->data, frame->nb_samples);
-
-                    enc_frame->pts = av_rescale_q(frame->pts, dec_ctx->time_base, enc_ctx->time_base);
-
-                    if (avcodec_send_frame(enc_ctx, enc_frame) >= 0) {
-                        while (avcodec_receive_packet(enc_ctx, out_packet) >= 0) {
-                            av_packet_rescale_ts(out_packet, enc_ctx->time_base, ofmt_ctx->streams[0]->time_base);
-                            out_packet->stream_index = 0;
-                            av_interleaved_write_frame(ofmt_ctx, out_packet);
-                            av_packet_unref(out_packet);
+                    int resampled_samples = swr_convert(resample_ctx, dst_data, max_dst_nb_samples, (const uint8_t**)frame->data, frame->nb_samples);
+                    if (resampled_samples > 0) {
+                        if (av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + resampled_samples) < 0) {
+                            av_freep(&dst_data[0]);
+                            av_freep(&dst_data);
+                            goto loop_cleanup;
                         }
+                        av_audio_fifo_write(fifo, (void**)dst_data, resampled_samples);
                     }
-                    av_frame_unref(enc_frame);
+
+                    av_freep(&dst_data[0]);
+                    av_freep(&dst_data);
+                    
+                    if (!encode_from_fifo()) goto loop_cleanup;
                 }
             }
             av_packet_unref(packet);
         }
 
-        // Flush encoder
+        // Flush resampler
+        {
+            uint8_t** dst_data = nullptr;
+            int dst_linesize;
+            int max_dst_nb_samples = swr_get_out_samples(resample_ctx, 0);
+            if (max_dst_nb_samples > 0 && av_samples_alloc_array_and_samples(&dst_data, &dst_linesize, enc_ctx->ch_layout.nb_channels, max_dst_nb_samples, enc_ctx->sample_fmt, 0) >= 0) {
+                int resampled_samples = swr_convert(resample_ctx, dst_data, max_dst_nb_samples, nullptr, 0);
+                if (resampled_samples > 0) {
+                    if (av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + resampled_samples) >= 0) {
+                        av_audio_fifo_write(fifo, (void**)dst_data, resampled_samples);
+                    }
+                }
+                av_freep(&dst_data[0]);
+                av_freep(&dst_data);
+            }
+        }
+
+        // Flush FIFO and Encoder
+        success = true; // Mark as flushing
+        if (!encode_from_fifo()) goto loop_cleanup;
+
         avcodec_send_frame(enc_ctx, nullptr);
         while (avcodec_receive_packet(enc_ctx, out_packet) >= 0) {
             av_packet_rescale_ts(out_packet, enc_ctx->time_base, ofmt_ctx->streams[0]->time_base);
@@ -222,7 +281,6 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
         }
 
         av_write_trailer(ofmt_ctx);
-        success = true;
 
     loop_cleanup:
         av_packet_free(&packet);
@@ -240,6 +298,7 @@ cleanup:
         avformat_free_context(ofmt_ctx);
     }
     if (resample_ctx) swr_free(&resample_ctx);
+    if (fifo) av_audio_fifo_free(fifo);
 
     if (success) CROW_LOG_INFO << "Successfully transcoded to " << target_format;
     else CROW_LOG_ERROR << "Failed to transcode to " << target_format;

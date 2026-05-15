@@ -5,6 +5,20 @@
 #include <vector>
 #include <string>
 
+namespace {
+    struct ThreadLocalConnection {
+        MYSQL* conn = nullptr;
+        ~ThreadLocalConnection() {
+            if (conn) {
+                mysql_close(conn);
+                CROW_LOG_INFO << "Thread-local database connection closed.";
+            }
+        }
+    };
+
+    thread_local ThreadLocalConnection tl_conn;
+}
+
 namespace services {
 
 DatabaseService& DatabaseService::get_instance() {
@@ -29,16 +43,6 @@ void DatabaseService::initialize(const std::string& host, int port, const std::s
 
     CROW_LOG_INFO << "DatabaseService initialized for " << host << ":" << port;
 }
-
-struct ThreadLocalConnection {
-    MYSQL* conn = nullptr;
-    ~ThreadLocalConnection() {
-        if (conn) {
-            mysql_close(conn);
-            CROW_LOG_INFO << "Thread-local database connection closed.";
-        }
-    }
-};
 
 MYSQL* DatabaseService::create_connection() {
     std::string host, user, pass, db;
@@ -67,7 +71,6 @@ MYSQL* DatabaseService::create_connection() {
 }
 
 bool DatabaseService::reconnect() {
-    static thread_local ThreadLocalConnection tl_conn;
     if (tl_conn.conn) {
         mysql_close(tl_conn.conn);
         tl_conn.conn = nullptr;
@@ -188,8 +191,6 @@ MYSQL* DatabaseService::get_connection() {
         throw std::runtime_error("Database connection not initialized. Call initialize() first.");
     }
 
-    static thread_local ThreadLocalConnection tl_conn;
-    
     if (!tl_conn.conn) {
         tl_conn.conn = create_connection();
         if (!tl_conn.conn) {

@@ -325,10 +325,18 @@ void BatchManager::start_monitors() {
                     if (stop_flag_) break;
                     struct TaskInfo { std::string id, file_id, content_type, dest; };
                     std::vector<TaskInfo> tasks_to_do;
+                    std::vector<std::string> ids_to_mark;
+
                     {
                         std::lock_guard<std::mutex> lock(db_mutex_);
                         utils::StatementWrapper stmt(conn);
-                        if (stmt.prepare("SELECT id, file_id, content_type, destination_path, created_at FROM tasks WHERE batch_id = ? AND status = 'pending' ORDER BY created_at ASC")) {
+                        // Efficiently fetch tasks and their elapsed time in one query
+                        const char* select_query = 
+                            "SELECT id, file_id, content_type, destination_path, "
+                            "(UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP(created_at)) * 1000 AS elapsed_ms "
+                            "FROM tasks WHERE batch_id = ? AND status = 'pending' ORDER BY created_at ASC";
+
+                        if (stmt.prepare(select_query)) {
                             MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
                             stmt.bind_string_param(0, b.id, bind);
                             if (stmt.bind_params(bind) && stmt.execute() && stmt.store_result()) {
@@ -336,55 +344,41 @@ void BatchManager::start_monitors() {
                                 std::vector<char> f_id_buf(2048); unsigned long f_id_len;
                                 char ct_buf[256]; unsigned long ct_len; bool ct_null;
                                 std::vector<char> dest_buf(2048); unsigned long dest_len;
-                                char created_buf[30]; unsigned long created_len;
+                                double elapsed_ms = 0;
                                 
                                 MYSQL_BIND res_bind[5]; memset(res_bind, 0, sizeof(res_bind));
                                 res_bind[0].buffer_type = MYSQL_TYPE_STRING; res_bind[0].buffer = id_buf; res_bind[0].buffer_length = sizeof(id_buf); res_bind[0].length = &id_len;
                                 res_bind[1].buffer_type = MYSQL_TYPE_STRING; res_bind[1].buffer = f_id_buf.data(); res_bind[1].buffer_length = f_id_buf.size(); res_bind[1].length = &f_id_len;
                                 res_bind[2].buffer_type = MYSQL_TYPE_STRING; res_bind[2].buffer = ct_buf; res_bind[2].buffer_length = sizeof(ct_buf); res_bind[2].length = &ct_len; res_bind[2].is_null = (char*)&ct_null;
                                 res_bind[3].buffer_type = MYSQL_TYPE_STRING; res_bind[3].buffer = dest_buf.data(); res_bind[3].buffer_length = dest_buf.size(); res_bind[3].length = &dest_len;
-                                res_bind[4].buffer_type = MYSQL_TYPE_STRING; res_bind[4].buffer = created_buf; res_bind[4].buffer_length = sizeof(created_buf); res_bind[4].length = &created_len;
+                                res_bind[4].buffer_type = MYSQL_TYPE_DOUBLE; res_bind[4].buffer = &elapsed_ms;
                                 
                                 if (stmt.bind_result(res_bind) && stmt.fetch() == 0) {
-                                    std::string oldest_created(created_buf, created_len);
-                                    double elapsed_ms = 0;
-                                    utils::StatementWrapper t_stmt(conn);
-                                    if (t_stmt.prepare("SELECT (UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP(?)) * 1000")) {
-                                        MYSQL_BIND t_bind[1]; memset(t_bind, 0, sizeof(t_bind));
-                                        t_stmt.bind_string_param(0, oldest_created, t_bind);
-                                        if (t_stmt.bind_params(t_bind) && t_stmt.execute() && t_stmt.store_result()) {
-                                            MYSQL_BIND r_bind[1]; memset(r_bind, 0, sizeof(r_bind));
-                                            r_bind[0].buffer_type = MYSQL_TYPE_DOUBLE; r_bind[0].buffer = &elapsed_ms;
-                                            if (t_stmt.bind_result(r_bind)) t_stmt.fetch();
-                                        }
-                                    }
-
                                     if (elapsed_ms >= b.wait_ms) {
-                                        std::vector<std::string> ids_to_mark;
                                         do {
                                             tasks_to_do.push_back({std::string(id_buf, id_len), std::string(f_id_buf.data(), f_id_len), ct_null ? "" : std::string(ct_buf, ct_len), std::string(dest_buf.data(), dest_len)});
                                             ids_to_mark.push_back(std::string(id_buf, id_len));
                                         } while (stmt.fetch() == 0);
-
-                                        if (!ids_to_mark.empty() && !stop_flag_) {
-                                            for (const auto& task_id : ids_to_mark) {
-                                                utils::StatementWrapper u_stmt(conn);
-                                                if (u_stmt.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?")) {
-                                                    MYSQL_BIND u_bind[1]; memset(u_bind, 0, sizeof(u_bind));
-                                                    u_stmt.bind_string_param(0, task_id, u_bind);
-                                                    u_stmt.bind_params(u_bind); u_stmt.execute();
-                                                }
-                                            }
-                                        }
                                     }
                                 }
+                            }
+                        }
+                    } // stmt is destroyed here, connection is now free
+
+                    if (!ids_to_mark.empty() && !stop_flag_) {
+                        std::lock_guard<std::mutex> lock(db_mutex_);
+                        for (const auto& task_id : ids_to_mark) {
+                            utils::StatementWrapper u_stmt(conn);
+                            if (u_stmt.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?")) {
+                                MYSQL_BIND u_bind[1]; memset(u_bind, 0, sizeof(u_bind));
+                                u_stmt.bind_string_param(0, task_id, u_bind);
+                                u_stmt.bind_params(u_bind); u_stmt.execute();
                             }
                         }
                     }
 
                     if (!tasks_to_do.empty() && !stop_flag_) {
-                        std::lock_guard<std::mutex> t_lock(thread_mutex_);
-                        monitor_threads_.emplace_back([this, tasks_to_do, b_id = b.id]() mutable {
+                        std::thread([this, tasks_to_do, b_id = b.id]() mutable {
                             mysql_thread_init();
                             MYSQL* t_conn = DatabaseService::get_instance().get_connection();
                             int max_retries = 3; long long max_bytes = 0; long long inter_task_delay_ms = 5000;
@@ -497,29 +491,36 @@ void BatchManager::start_monitors() {
                                     int res_val = opts.value("waveform_resolution", 512);
                                     MediaResult m_res = MediaService::extract_waveform(t.dest, res_val);
                                     if (m_res.success) {
-                                        std::lock_guard<std::mutex> lock(db_mutex_);
-                                        utils::StatementWrapper m_stmt(t_conn);
-                                        if (m_stmt.prepare("INSERT INTO media_metadata (task_id, file_size, format, duration_seconds) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE file_size=VALUES(file_size), format=VALUES(format), duration_seconds=VALUES(duration_seconds)")) {
-                                            MYSQL_BIND m_bind[4]; memset(m_bind, 0, sizeof(m_bind));
-                                            m_stmt.bind_string_param(0, t.id, m_bind);
-                                            m_stmt.bind_long_param(1, &m_res.file_size, m_bind);
-                                            m_stmt.bind_string_param(2, m_res.format, m_bind);
-                                            m_stmt.bind_float_param(3, &m_res.duration_seconds, m_bind);
-                                            m_stmt.bind_params(m_bind); m_stmt.execute();
+                                        // 1. Update Media Metadata
+                                        {
+                                            std::lock_guard<std::mutex> lock(db_mutex_);
+                                            utils::StatementWrapper m_stmt(t_conn);
+                                            if (m_stmt.prepare("INSERT INTO media_metadata (task_id, file_size, format, duration_seconds) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE file_size=VALUES(file_size), format=VALUES(format), duration_seconds=VALUES(duration_seconds)")) {
+                                                MYSQL_BIND m_bind[4]; memset(m_bind, 0, sizeof(m_bind));
+                                                m_stmt.bind_string_param(0, t.id, m_bind);
+                                                m_stmt.bind_long_param(1, &m_res.file_size, m_bind);
+                                                m_stmt.bind_string_param(2, m_res.format, m_bind);
+                                                m_stmt.bind_float_param(3, &m_res.duration_seconds, m_bind);
+                                                m_stmt.bind_params(m_bind); m_stmt.execute();
+                                            }
                                         }
 
-                                        const char* wave_query = "INSERT INTO waveforms (task_id, waveform_peaks_binary, resolution) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE waveform_peaks_binary=VALUES(waveform_peaks_binary), resolution=VALUES(resolution)";
-                                        utils::StatementWrapper w_stmt(t_conn);
-                                        if (w_stmt.isValid() && w_stmt.prepare(wave_query)) {
-                                            MYSQL_BIND bind[3]; memset(bind, 0, sizeof(bind));
-                                            w_stmt.bind_string_param(0, t.id, bind);
-                                            size_t binary_size = m_res.waveform_peaks.size() * sizeof(services::WaveformPointInt16);
-                                            w_stmt.bind_blob_param(1, m_res.waveform_peaks.data(), (unsigned long)binary_size, bind);
-                                            w_stmt.bind_int_param(2, &res_val, bind);
-                                            w_stmt.bind_params(bind); w_stmt.execute();
+                                        // 2. Update Waveform Data
+                                        {
+                                            std::lock_guard<std::mutex> lock(db_mutex_);
+                                            const char* wave_query = "INSERT INTO waveforms (task_id, waveform_peaks_binary, resolution) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE waveform_peaks_binary=VALUES(waveform_peaks_binary), resolution=VALUES(resolution)";
+                                            utils::StatementWrapper w_stmt(t_conn);
+                                            if (w_stmt.isValid() && w_stmt.prepare(wave_query)) {
+                                                MYSQL_BIND bind[3]; memset(bind, 0, sizeof(bind));
+                                                w_stmt.bind_string_param(0, t.id, bind);
+                                                size_t binary_size = m_res.waveform_peaks.size() * sizeof(services::WaveformPointInt16);
+                                                w_stmt.bind_blob_param(1, m_res.waveform_peaks.data(), (unsigned long)binary_size, bind);
+                                                w_stmt.bind_int_param(2, &res_val, bind);
+                                                w_stmt.bind_params(bind); w_stmt.execute();
+                                            }
                                         }
 
-                                        // 3. Perform Transcoding
+                                        // 3. Perform Transcoding (COMPLETELY OUTSIDE LOCKS)
                                         std::vector<std::string> trans_formats = opts.value("transcode_formats", std::vector<std::string>{});
                                         if (!trans_formats.empty()) {
                                             std::vector<std::string> successful_transcodes;
@@ -532,6 +533,7 @@ void BatchManager::start_monitors() {
                                                 }
                                             }
                                             
+                                            // 4. Update Transcoded Formats
                                             if (!successful_transcodes.empty()) {
                                                 std::lock_guard<std::mutex> lock(db_mutex_);
                                                 utils::StatementWrapper t_stmt(t_conn);
@@ -551,7 +553,7 @@ void BatchManager::start_monitors() {
                                 }
                             }
                             mysql_thread_end();
-                        });
+                        }).detach();
                     }
                 }
             }
@@ -648,6 +650,8 @@ bool BatchManager::complete_batch(const std::string& batch_id) {
 std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id) {
     MYSQL* conn = DatabaseService::get_instance().get_connection();
     models::Batch b; b.id = batch_id;
+    
+    // 1. Fetch Batch Status and Options
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         const char* query = "SELECT status, options FROM batches WHERE id = ?";
@@ -677,10 +681,17 @@ std::optional<models::Batch> BatchManager::get_batch(const std::string& batch_id
         b.options.allowed_services = opts.value("allowed_services", std::vector<std::string>{});
         b.options.allowed_content_types = opts.value("allowed_content_types", std::vector<std::string>{});
         b.options.delete_after = opts.value("delete_after", ""); b.options.waveform_resolution = opts.value("waveform_resolution", 1024);
+    }
 
+    // 2. Fetch Tasks Summary (using a separate scope to ensure stmt above is closed)
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
         const char* task_query = "SELECT id, status FROM tasks WHERE batch_id = ?";
         utils::StatementWrapper t_stmt(conn);
         if (t_stmt.isValid() && t_stmt.prepare(task_query)) {
+            MYSQL_BIND bind[1]; memset(bind, 0, sizeof(bind));
+            t_stmt.bind_string_param(0, batch_id, bind);
+
             if (t_stmt.bind_params(bind) && t_stmt.execute() && t_stmt.store_result()) {
                 MYSQL_BIND res_bind_tasks[2]; memset(res_bind_tasks, 0, sizeof(res_bind_tasks));
                 char id_buf[37]; unsigned long id_len = 0;
