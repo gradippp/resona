@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 project(resona 
-    VERSION 0.7.0 
+    VERSION 0.9.0 
     DESCRIPTION "Microservice for media ingestion and waveform processing"
     LANGUAGES CXX)
 
@@ -65,6 +65,21 @@ add_subdirectory(third_party/cpr)
 add_subdirectory(third_party/crow)
 add_subdirectory(third_party/catch2)
 
+# FFmpeg integration
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
+pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+
+add_library(ffmpeg INTERFACE)
+target_link_libraries(ffmpeg INTERFACE
+    PkgConfig::AVFORMAT
+    PkgConfig::AVCODEC
+    PkgConfig::AVUTIL
+    PkgConfig::SWRESAMPLE
+)
+
 # Core library (logic shared between main app and tests)
 add_library(resona-core STATIC
     src/routes/routes.cpp
@@ -90,6 +105,7 @@ target_link_libraries(resona-core PUBLIC
     nlohmann_json::nlohmann_json 
     cpr
     libmariadb
+    ffmpeg
 )
 
 # Main executable

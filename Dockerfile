@@ -9,7 +9,8 @@ RUN apk add --no-cache \
     mariadb-dev \
     linux-headers \
     pkgconf \
-    mariadb-connector-c-dev
+    mariadb-connector-c-dev \
+    ffmpeg-dev
 
 WORKDIR /app
 
@@ -43,7 +44,8 @@ RUN apk add --no-cache \
     libstdc++ \
     libgcc \
     mariadb-connector-c \
-    openssl
+    openssl \
+    ffmpeg-libs
 
 WORKDIR /app
 

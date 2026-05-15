@@ -5,10 +5,11 @@ A focused microservice designed for media ingestion and waveform processing. It 
 ## Features
 - **Batch Processing**: Group multiple file ingestion tasks into manageable batches.
 - **Asynchronous Execution**: Ingestion and processing happen in background threads, keeping the API responsive.
+- **Native Media Transcoding**: High-performance transcoding to formats like **MP3** and **OGG/Vorbis** powered by FFmpeg.
 - **Auto-Cleanup**: Automatically delete processed source files after a specified duration.
 - **Cloud Support**: Supports Dropbox and Google Drive.
 - **Professional Waveforms**: Constant-memory, streaming extraction of symmetric min/max peak-envelopes. Optimized for transient-rich audio with perceptual gamma scaling.
-- **Low-Latency Streaming**: Optimized media delivery with support for HTTP Range seeking.
+- **Low-Latency Streaming**: Optimized media delivery with support for HTTP Range seeking and on-the-fly format selection.
 
 ## Setup & Installation
 
@@ -16,7 +17,26 @@ A focused microservice designed for media ingestion and waveform processing. It 
 - **CMake** (3.18 or higher)
 - **C++ Compiler** (C++17 support required, e.g., Visual Studio 2022/2026, GCC, or Clang)
 - **Git**
+- **FFmpeg** (v5.1 or higher): Required for media transcoding and analytics.
 - **MariaDB / MySQL**: An active database instance is required for the application and tests.
+
+### System Dependencies (FFmpeg)
+
+#### Linux (Ubuntu/Debian)
+```bash
+sudo apt-get update
+sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev libswresample-dev pkg-config
+```
+
+#### macOS (Homebrew)
+```bash
+brew install ffmpeg pkg-config
+```
+
+#### Alpine Linux (Docker)
+```bash
+apk add ffmpeg-dev ffmpeg-libs pkgconf
+```
 
 ### Building the Project
 The project uses git submodules for dependencies.
@@ -29,9 +49,17 @@ The project uses git submodules for dependencies.
     ```
 
 2.  **Configure and Build:**
+    
+    **Windows (vcpkg):**
     ```powershell
-    cmake -B build -G "Visual Studio 18 2026" -A x64 -DCPR_CURL_USE_LIBPSL=OFF
-    cmake --build build --config Release --parallel 8
+    cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    cmake --build build --config Release
+    ```
+
+    **Linux / macOS:**
+    ```bash
+    cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j$(nproc)
     ```
 
 ### Configuration

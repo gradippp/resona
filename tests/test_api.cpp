@@ -51,7 +51,7 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         auto create_res = cpr::Post(
             cpr::Url{"http://localhost:8081/v1/batch"},
             cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{"{\"wait_duration\": \"2s\", \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"allowed_content_types\": [], \"delete_after\": \"24H\", \"waveform_resolution\": 512}"}
+            cpr::Body{"{\"wait_duration\": \"2s\", \"max_retries\": 2, \"max_batch_size\": 10, \"max_batch_storage\": \"1G\", \"allowed_services\": [], \"allowed_content_types\": [], \"delete_after\": \"24H\", \"waveform_resolution\": 512, \"transcode_formats\": []}"}
         );
         
         REQUIRE(create_res.status_code == 200);
@@ -132,8 +132,13 @@ TEST_CASE_METHOD(ServerFixture, "API Integration Tests", "[api]") {
         
         REQUIRE(ingested_json["id"] == task_id);
         REQUIRE(ingested_json.contains("metadata"));
+        REQUIRE(ingested_json.contains("url"));
+        REQUIRE(ingested_json["url"].is_array());
+        REQUIRE_FALSE(ingested_json.contains("local_urls"));
+        REQUIRE_FALSE(ingested_json.contains("stream_urls"));
         REQUIRE_FALSE(ingested_json.contains("destination_path"));
         REQUIRE_FALSE(ingested_json.contains("content_type"));
+        REQUIRE_FALSE(ingested_json.contains("local_url"));
         // waveform_resolution will be 0 here because it's not a real media file
 
         // 8. Test /v1/ingested/{task_id}/stream

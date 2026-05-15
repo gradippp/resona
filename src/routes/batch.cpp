@@ -107,6 +107,20 @@ namespace batch {
             }
 
             std::string path = task->destination_path;
+
+            // Check for format override
+            char* format_param = req.url_params.get("format");
+            if (format_param) {
+                std::string fmt(format_param);
+                std::filesystem::path base_path = std::filesystem::path(path).parent_path();
+                std::string trans_path = (base_path / (task_id + "." + fmt)).string();
+                if (std::filesystem::exists(trans_path)) {
+                    path = trans_path;
+                } else {
+                    CROW_LOG_WARNING << "Streaming failed: Requested format '" << fmt << "' not found for task " << task_id;
+                    return utils::error_response("Requested format not available", 404);
+                }
+            }
             
             // SECURITY: Prevent path traversal and ensure the file is within the storage directory
             if (!utils::is_path_safe(path, manager.get_storage_directory())) {

@@ -26,6 +26,15 @@ public:
      * Supports WAV, MP3, and FLAC.
      */
     static MediaResult extract_waveform(const std::string& filepath, int resolution);
+
+    /**
+     * Transcodes an audio file to a target format using FFmpeg.
+     * @param input_filepath Path to the source file.
+     * @param output_filepath Path to save the transcoded file.
+     * @param target_format Target extension/format (e.g., "mp3", "ogg").
+     * @return true if successful, false otherwise.
+     */
+    static bool transcode_audio(const std::string& input_filepath, const std::string& output_filepath, const std::string& target_format);
 };
 
 } // namespace services

@@ -36,8 +36,9 @@ struct CreateBatchRequest {
     std::vector<std::string> allowed_content_types;
     std::string delete_after; // e.g., "24H", "30m"
     int waveform_resolution = 4096;
+    std::vector<std::string> transcode_formats;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateBatchRequest, wait_duration, max_retries, max_batch_size, max_batch_storage, allowed_services, allowed_content_types, delete_after, waveform_resolution)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateBatchRequest, wait_duration, max_retries, max_batch_size, max_batch_storage, allowed_services, allowed_content_types, delete_after, waveform_resolution, transcode_formats)
 
 struct AddTaskRequest {
     std::string file_id;
@@ -57,18 +58,25 @@ struct TaskSummary {
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TaskSummary, id, status)
 
+struct MediaUrl {
+    std::string stream_url;
+    std::string local_url;
+    std::string content_type;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MediaUrl, stream_url, local_url, content_type)
+
 struct Task {
     std::string id;
     std::string file_id;
     std::string content_type = "";
     std::string destination_path;
     std::string status = "pending"; // pending, processing, downloading, success, failed
-    std::string local_url = "";
+    std::vector<MediaUrl> url;
     std::optional<TaskMetadata> metadata;
     std::string waveform_peaks_b64 = "";
     int waveform_resolution = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, status, local_url, metadata, waveform_peaks_b64, waveform_resolution)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Task, id, file_id, status, url, metadata, waveform_peaks_b64, waveform_resolution)
 
 struct WaveformPointInt16 {
     int16_t minPeak;
