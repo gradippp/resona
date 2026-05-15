@@ -123,9 +123,10 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
 
         enc_ctx = avcodec_alloc_context3(encoder);
         enc_ctx->sample_rate = dec_ctx->sample_rate;
-        enc_ctx->channel_layout = dec_ctx->channel_layout;
-        if (!enc_ctx->channel_layout) enc_ctx->channel_layout = av_get_default_channel_layout(dec_ctx->channels);
-        enc_ctx->channels = av_get_channel_layout_nb_channels(enc_ctx->channel_layout);
+        av_channel_layout_copy(&enc_ctx->ch_layout, &dec_ctx->ch_layout);
+        if (enc_ctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+            av_channel_layout_default(&enc_ctx->ch_layout, dec_ctx->ch_layout.nb_channels);
+        }
         enc_ctx->sample_fmt = encoder->sample_fmts[0];
         enc_ctx->time_base = {1, enc_ctx->sample_rate};
 
@@ -143,16 +144,13 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
 
     // 4. Setup Resampler
     {
-        int64_t in_ch_layout = dec_ctx->channel_layout;
-        if (!in_ch_layout) in_ch_layout = av_get_default_channel_layout(dec_ctx->channels);
-        
-        int64_t out_ch_layout = enc_ctx->channel_layout;
-        if (!out_ch_layout) out_ch_layout = av_get_default_channel_layout(enc_ctx->channels);
-
-        resample_ctx = swr_alloc_set_opts(nullptr,
-            out_ch_layout, enc_ctx->sample_fmt, enc_ctx->sample_rate,
-            in_ch_layout, dec_ctx->sample_fmt, dec_ctx->sample_rate,
-            0, nullptr);
+        if (swr_alloc_set_opts2(&resample_ctx,
+                &enc_ctx->ch_layout, enc_ctx->sample_fmt, enc_ctx->sample_rate,
+                &dec_ctx->ch_layout, dec_ctx->sample_fmt, dec_ctx->sample_rate,
+                0, nullptr) < 0) {
+            CROW_LOG_ERROR << "Failed to allocate resampler context";
+            goto cleanup;
+        }
     }
     if (!resample_ctx || swr_init(resample_ctx) < 0) {
         CROW_LOG_ERROR << "Failed to initialize resampler";
@@ -177,6 +175,7 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
         AVPacket* packet = av_packet_alloc();
         AVFrame* frame = av_frame_alloc();
         AVFrame* enc_frame = av_frame_alloc();
+        AVPacket* out_packet = av_packet_alloc();
         int ret;
 
         while (av_read_frame(ifmt_ctx, packet) >= 0) {
@@ -190,7 +189,7 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
                     // Resample / Convert format
                     enc_frame->nb_samples = enc_ctx->frame_size ? enc_ctx->frame_size : frame->nb_samples;
                     enc_frame->format = enc_ctx->sample_fmt;
-                    enc_frame->channel_layout = enc_ctx->channel_layout;
+                    av_channel_layout_copy(&enc_frame->ch_layout, &enc_ctx->ch_layout);
                     enc_frame->sample_rate = enc_ctx->sample_rate;
                     av_frame_get_buffer(enc_frame, 0);
 
@@ -200,14 +199,12 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
                     enc_frame->pts = av_rescale_q(frame->pts, dec_ctx->time_base, enc_ctx->time_base);
 
                     if (avcodec_send_frame(enc_ctx, enc_frame) >= 0) {
-                        AVPacket* out_packet = av_packet_alloc();
                         while (avcodec_receive_packet(enc_ctx, out_packet) >= 0) {
                             av_packet_rescale_ts(out_packet, enc_ctx->time_base, ofmt_ctx->streams[0]->time_base);
                             out_packet->stream_index = 0;
                             av_interleaved_write_frame(ofmt_ctx, out_packet);
                             av_packet_unref(out_packet);
                         }
-                        av_packet_free(&out_packet);
                     }
                     av_frame_unref(enc_frame);
                 }
@@ -217,14 +214,12 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
 
         // Flush encoder
         avcodec_send_frame(enc_ctx, nullptr);
-        AVPacket* out_packet = av_packet_alloc();
         while (avcodec_receive_packet(enc_ctx, out_packet) >= 0) {
             av_packet_rescale_ts(out_packet, enc_ctx->time_base, ofmt_ctx->streams[0]->time_base);
             out_packet->stream_index = 0;
             av_interleaved_write_frame(ofmt_ctx, out_packet);
             av_packet_unref(out_packet);
         }
-        av_packet_free(&out_packet);
 
         av_write_trailer(ofmt_ctx);
         success = true;
@@ -233,6 +228,7 @@ bool MediaService::transcode_audio(const std::string& input_filepath, const std:
         av_packet_free(&packet);
         av_frame_free(&frame);
         av_frame_free(&enc_frame);
+        av_packet_free(&out_packet);
     }
 
 cleanup:
